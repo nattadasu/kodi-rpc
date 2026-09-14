@@ -196,6 +196,12 @@ against the Kodi `file` path, so you can hide addons or shares:
 (plugin catch-all), plus legacy `book`/`audiobook` (unused by Kodi, kept so
 old configs still parse).
 
+Dynamic (`"name": "dynamic", "url": "dynamic"`) buttons resolve from
+series/movie library info — a TMDB link and, for movies, the trailer link
+when scraped — never from episode-level IDs (unreliable) or playback file
+URLs (often localhost proxies). (Discord only shows buttons to *other*
+users, never on your own profile.)
+
 ## Artwork behavior (`show_images`)
 
 Same fallback chain as jellyfin-rpc: imgur upload → litterbox upload →

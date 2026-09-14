@@ -239,6 +239,9 @@ fn proxy_file_shows_proxied_host() {
     let npi = NowPlayingItem::from_kodi(&item, &fake_props(), "video").expect("parses");
     assert_eq!(npi.media_type, crate::MediaType::Unknown);
     assert_eq!(npi.file_host_display(), "www.crunchyroll.com");
+    // Playback file URLs never become buttons; dynamics come from
+    // series/movie library info instead.
+    assert!(npi.external_urls.is_none());
 }
 
 /// A publicly reachable Kodi *without* auth can serve art to Discord's proxy.

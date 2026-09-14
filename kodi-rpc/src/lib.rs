@@ -73,6 +73,14 @@ struct FetchedSession {
     movieid: Option<i64>,
 }
 
+/// Cached library artwork + info links per show/season/movie.
+#[derive(Clone, Default)]
+struct CachedArt {
+    poster: Option<String>,
+    info_url: Option<String>,
+    trailer_url: Option<String>,
+}
+
 /// Client used to interact with Kodi and Discord
 pub struct Client {
     discord_ipc_client: DiscordIpcClient,
@@ -94,7 +102,7 @@ pub struct Client {
     image_processing_options: external::image_utils::ImageProcessingOptions,
     large_image_text: String,
     /// Poster lookups per show/season/movie; avoids an extra RPC per poll.
-    poster_cache: HashMap<String, Option<String>>,
+    poster_cache: HashMap<String, CachedArt>,
 }
 
 use kodi::Session;
@@ -448,24 +456,33 @@ impl Client {
                 };
                 let cache_key = format!("{}:tv:{}:s{}:{:?}", inst_idx, tvshowid, season, source);
                 if let Some(cached) = self.poster_cache.get(&cache_key) {
-                    npi.poster = cached.clone();
+                    Self::apply_art(npi, cached);
                     return;
                 }
-                let poster = if source == PosterSource::Series {
-                    self.fetch_tvshow_poster(inst_idx, tvshowid)
+                let mut art = CachedArt::default();
+                if source == PosterSource::Series {
+                    if let Some(details) = self.fetch_tvshow_details(inst_idx, tvshowid) {
+                        art.poster = pick_art_poster(&details.art);
+                        art.info_url = kodi::info_url("tv", &details);
+                    }
+                } else if let Some(details) = self.fetch_tvshow_details(inst_idx, tvshowid) {
+                    art.poster = self
+                        .fetch_season_poster(inst_idx, tvshowid, season)
+                        .or_else(|| pick_art_poster(&details.art));
+                    art.info_url = kodi::info_url("tv", &details);
                 } else {
-                    self.fetch_season_poster(inst_idx, tvshowid, season)
-                        .or_else(|| self.fetch_tvshow_poster(inst_idx, tvshowid))
-                };
+                    art.poster = self.fetch_season_poster(inst_idx, tvshowid, season);
+                }
                 debug!(
-                    "Poster for tvshow {} season {} ({:?}): {}",
+                    "Art for tvshow {} season {} ({:?}): poster={}, info={}",
                     tvshowid,
                     season,
                     source,
-                    poster.as_deref().unwrap_or("<none>")
+                    art.poster.as_deref().unwrap_or("<none>"),
+                    art.info_url.as_deref().unwrap_or("<none>"),
                 );
-                self.poster_cache.insert(cache_key, poster.clone());
-                npi.poster = poster;
+                self.poster_cache.insert(cache_key, art.clone());
+                Self::apply_art(npi, &art);
             }
             MediaType::Movie => {
                 let Some(movieid) = movieid else {
@@ -473,20 +490,51 @@ impl Client {
                 };
                 let cache_key = format!("{}:movie:{}", inst_idx, movieid);
                 if let Some(cached) = self.poster_cache.get(&cache_key) {
-                    npi.poster = cached.clone();
+                    Self::apply_art(npi, cached);
                     return;
                 }
-                let poster = self.fetch_movie_poster(inst_idx, movieid);
+                let mut art = CachedArt::default();
+                if let Some(details) = self.fetch_movie_details(inst_idx, movieid) {
+                    art.poster = pick_art_poster(&details.art);
+                    art.info_url = kodi::info_url("movie", &details);
+                    art.trailer_url = details
+                        .trailer
+                        .clone()
+                        .filter(|t| t.starts_with("http://") || t.starts_with("https://"))
+                        .filter(|t| !kodi::is_loopback_url(t));
+                }
                 debug!(
-                    "Poster for movie {}: {}",
+                    "Art for movie {}: poster={}, info={}, trailer={}",
                     movieid,
-                    poster.as_deref().unwrap_or("<none>")
+                    art.poster.as_deref().unwrap_or("<none>"),
+                    art.info_url.as_deref().unwrap_or("<none>"),
+                    art.trailer_url.as_deref().unwrap_or("<none>"),
                 );
-                self.poster_cache.insert(cache_key, poster.clone());
-                npi.poster = poster;
+                self.poster_cache.insert(cache_key, art.clone());
+                Self::apply_art(npi, &art);
             }
             _ => {}
         }
+    }
+
+    /// Dynamic buttons come from series/movie info (TMDB link, trailer) —
+    /// never from episode-level IDs or playback file URLs.
+    fn apply_art(npi: &mut NowPlayingItem, art: &CachedArt) {
+        npi.poster = art.poster.clone();
+        let mut urls = Vec::new();
+        if let Some(trailer) = art.trailer_url.clone() {
+            urls.push(kodi::ExternalUrl {
+                name: "Trailer".to_string(),
+                url: trailer,
+            });
+        }
+        if let Some(info) = art.info_url.clone() {
+            urls.push(kodi::ExternalUrl {
+                name: "TMDB".to_string(),
+                url: info,
+            });
+        }
+        npi.external_urls = if urls.is_empty() { None } else { Some(urls) };
     }
 
     fn fetch_season_poster(&self, inst_idx: usize, tvshowid: i32, season: i32) -> Option<String> {
@@ -508,7 +556,7 @@ impl Client {
         pick_season_poster(&res.seasons, season)
     }
 
-    fn fetch_tvshow_poster(&self, inst_idx: usize, tvshowid: i32) -> Option<String> {
+    fn fetch_tvshow_details(&self, inst_idx: usize, tvshowid: i32) -> Option<kodi::ArtHolder> {
         #[derive(Serialize)]
         struct Params {
             tvshowid: i32,
@@ -520,14 +568,14 @@ impl Client {
                 "VideoLibrary.GetTVShowDetails",
                 Params {
                     tvshowid,
-                    properties: vec!["art"],
+                    properties: vec!["art", "uniqueid"],
                 },
             )
             .ok()?;
-        pick_art_poster(&res.tvshowdetails.art)
+        Some(res.tvshowdetails)
     }
 
-    fn fetch_movie_poster(&self, inst_idx: usize, movieid: i64) -> Option<String> {
+    fn fetch_movie_details(&self, inst_idx: usize, movieid: i64) -> Option<kodi::ArtHolder> {
         #[derive(Serialize)]
         struct Params {
             movieid: i64,
@@ -539,11 +587,11 @@ impl Client {
                 "VideoLibrary.GetMovieDetails",
                 Params {
                     movieid,
-                    properties: vec!["art"],
+                    properties: vec!["art", "uniqueid", "trailer"],
                 },
             )
             .ok()?;
-        pick_art_poster(&res.moviedetails.art)
+        Some(res.moviedetails)
     }
 
     fn get_buttons(&self) -> Option<Vec<Button>> {

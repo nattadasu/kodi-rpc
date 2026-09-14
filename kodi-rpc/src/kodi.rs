@@ -82,8 +82,6 @@ pub fn get_item_properties() -> Vec<&'static str> {
         "track",
         "channeltype",
         "channelnumber",
-        // Library IDs used for poster lookups (ignored when absent/-1,
-        // e.g. plugin content outside the library).
         "tvshowid",
     ]
 }
@@ -102,8 +100,7 @@ fn default_label() -> String {
     String::new()
 }
 
-/// Accepts Kodi's `String | Vec<String> | null` inconsistency for fields
-/// like `studio`/`director`/`artist`.
+/// Accepts `String | Vec<String> | null`.
 fn string_or_vec<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
 where
     D: Deserializer<'de>,
@@ -251,10 +248,9 @@ pub struct KodiItem {
     pub label: String,
     #[serde(rename = "type", default = "default_type")]
     pub item_type: String,
-    /// Library ID of the item itself (`episodeid`/`movieid`). Absent for plugins.
+    /// Library ID of the item itself. Absent for plugins.
     #[serde(default)]
     pub id: Option<i64>,
-    /// TV show ID for episodes. `-1`/absent when unknown.
     #[serde(default)]
     pub tvshowid: Option<i32>,
     #[serde(default)]
@@ -389,6 +385,42 @@ pub struct MovieDetailsResult {
 pub struct ArtHolder {
     #[serde(default)]
     pub art: HashMap<String, String>,
+    /// Provider IDs. Values can be numbers.
+    #[serde(default)]
+    pub uniqueid: HashMap<String, serde_json::Value>,
+    /// Trailer URL when scraped. Often a `plugin://` URL.
+    #[serde(default)]
+    pub trailer: Option<String>,
+}
+
+fn id_string(value: Option<&serde_json::Value>) -> Option<String> {
+    let v = value?;
+    if let Some(s) = v.as_str() {
+        let s = s.trim();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    } else if v.is_number() {
+        Some(v.to_string())
+    } else {
+        None
+    }
+}
+
+/// TMDB/IMDb link from `uniqueid` only (episode-level IDs are unreliable).
+/// `kind` is `"tv"` or `"movie"`.
+pub fn info_url(kind: &str, details: &ArtHolder) -> Option<String> {
+    if let Some(tmdb) = id_string(details.uniqueid.get("tmdb")) {
+        return Some(format!("https://www.themoviedb.org/{kind}/{tmdb}"));
+    }
+    if let Some(imdb) = id_string(details.uniqueid.get("imdb")) {
+        if imdb.starts_with("tt") {
+            return Some(format!("https://www.imdb.com/title/{imdb}/"));
+        }
+    }
+    None
 }
 
 /// Pick the `poster` entry out of an `art` dict. Blank entries don't count.
@@ -406,17 +438,14 @@ pub fn pick_season_poster(seasons: &[SeasonInfo], season: i32) -> Option<String>
         .and_then(|s| pick_art_poster(&s.art))
 }
 
-// ---------------------------------------------------------------------------
-// Normalized session (mirrors the jellyfin-rpc shape so the Discord layer
-// stays a hard clone).
-// ---------------------------------------------------------------------------
+// Normalized session
 
 #[derive(Debug)]
 pub struct Session {
     pub now_playing_item: NowPlayingItem,
     pub play_state: PlayState,
     pub item_id: String,
-    /// Index of the owning Kodi instance (multi-instance setups).
+    /// Owning Kodi instance index.
     pub source: usize,
 }
 
@@ -519,7 +548,6 @@ pub struct ExternalUrl {
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Normalized model: all fields kept for display/config use
 pub struct NowPlayingItem {
-    // Generic (kept compatible with jellyfin-rpc field names)
     pub name: String,
     pub media_type: MediaType,
     pub id: String,
@@ -531,26 +559,22 @@ pub struct NowPlayingItem {
     pub community_rating: Option<f64>,
     pub original_title: Option<String>,
     pub path: Option<String>,
-    // Episode related
     pub parent_index_number: Option<i32>,
     pub index_number: Option<i32>,
     pub index_number_end: Option<i32>,
     pub series_name: Option<String>,
     pub series_id: Option<String>,
     pub series_studio: Option<String>,
-    // Audio related
     pub artists: Option<Vec<String>>,
     pub extra_type: Option<String>,
     pub album_id: Option<String>,
     pub album: Option<String>,
-    // Kodi-specific (used for plugin playback + images)
     pub label: String,
     pub file: String,
     pub addon_id: Option<String>,
     pub is_plugin: bool,
     pub thumbnail: Option<String>,
     pub fanart: Option<String>,
-    /// Series/season/movie poster (preferred over the episode still).
     pub poster: Option<String>,
     pub plot: Option<String>,
     pub player_kind: String,
@@ -625,17 +649,9 @@ impl NowPlayingItem {
             }
         };
 
-        // Resolved http(s) plugin URLs double as dynamic buttons.
-        let external_urls = if file.starts_with("http://") || file.starts_with("https://") {
-            Some(vec![ExternalUrl {
-                name: "Open Media".to_string(),
-                url: file.clone(),
-            }])
-        } else {
-            None
-        };
+        // Dynamic buttons come from series/movie library info.
+        let external_urls = None;
 
-        // Image-cache key: file path works for library and plugin items alike.
         let id = if file.is_empty() {
             name.clone()
         } else {
@@ -674,17 +690,15 @@ impl NowPlayingItem {
             is_plugin,
             thumbnail: item.thumbnail.clone().filter(|t| !t.is_empty()),
             fanart: item.fanart.clone().filter(|f| !f.is_empty()),
-            // Filled in later by the client's poster lookup (needs RPC).
             poster: None,
             plot: item.plot.clone().filter(|p| !p.is_empty()),
             player_kind: player_kind.to_string(),
         })
     }
 
-    /// Human-readable host/addon for `{file-host}` display templates.
+    /// Host/addon for `{file-host}` templates.
     pub fn file_host_display(&self) -> String {
         if let Some(addon) = &self.addon_id {
-            // Shorten `plugin.video.youtube` -> `youtube` when it has a prefix.
             let short = addon.rsplit('.').next().unwrap_or(addon);
             return short.to_string();
         }
@@ -714,29 +728,22 @@ impl NowPlayingItem {
     }
 }
 
-/// The type of the currently playing content.
-///
-/// `Unknown` is the important one for this fork: Kodi returns
-/// `type: "unknown"` for just about every 3rd-party plugin stream
-/// (`plugin://...`). Unlike `None` (nothing usable), `Unknown` still
-/// displays — label/file based — so plugin playback shows up in Discord.
+/// Content type. `Unknown` (e.g. `type: "unknown"` plugin streams) still
+/// displays, unlike `None`.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum MediaType {
-    /// If the content playing is a Movie.
     Movie,
-    /// If the content playing is an Episode.
     Episode,
-    /// If the content playing is Live TV / PVR channel.
+    /// Live TV / PVR channel.
     LiveTv,
-    /// If the content playing is Music.
     Music,
-    /// If the content playing is a Book (kept for config compat; unused by Kodi).
+    /// Kept for config compat; unused by Kodi.
     Book,
-    /// If the content playing is an Audio Book (kept for config compat; unused by Kodi).
+    /// Kept for config compat; unused by Kodi.
     AudioBook,
-    /// 3rd-party plugin / unclassified content. Still displayed.
+    /// Plugin / unclassified content. Still displayed.
     Unknown,
-    /// Nothing usable (e.g. pictures, empty players).
+    /// Nothing usable (pictures, empty players).
     None,
 }
 
@@ -890,8 +897,7 @@ impl PlayState {
 // Kodi label helpers — this is what makes 3rd-party plugins work.
 // ---------------------------------------------------------------------------
 
-/// Strip Kodi `[...]` formatting tags (`[COLOR red]`, `[/COLOR]`, `[B]`,
-/// `[I]`, `[UPPERCASE]`, ...) that plugins love to embed in labels.
+/// Strip Kodi `[...]` formatting tags from labels.
 pub fn strip_kodi_tags(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut in_tag = false;
@@ -930,8 +936,7 @@ pub fn extract_addon_id(file: &str) -> Option<String> {
     }
 }
 
-/// True for URLs pointing at this machine: local proxy/playback addresses
-/// nobody else — including Discord — could ever open.
+/// True for loopback URLs (unopenable by anyone else, including Discord).
 pub fn is_loopback_url(url: &str) -> bool {
     let lower = url.to_lowercase();
     [
@@ -946,9 +951,8 @@ pub fn is_loopback_url(url: &str) -> bool {
     .any(|p| lower.starts_with(p))
 }
 
-/// Unwrap `image://<url-encoded>/` to the inner URL when it points at a
-/// remote file. Plugins (e.g. Crunchyroll) wrap CDN art this way; local
-/// schemes (`video@`, `musicdb://`, ...) return None.
+/// Unwrap `image://<url-encoded>/` to the inner URL for remote files.
+/// Local schemes return None.
 pub fn unwrap_remote_image(remote: &str) -> Option<String> {
     let inner = remote.strip_prefix("image://")?.trim_end_matches('/');
     if inner.is_empty() {
@@ -1080,10 +1084,47 @@ mod kodi_tests {
     }
 
     #[test]
+    fn info_url_prefers_tmdb() {
+        use serde_json::Value;
+        use std::collections::HashMap;
+        let holder = |tmdb: Option<Value>, imdb: Option<&str>| ArtHolder {
+            art: HashMap::new(),
+            uniqueid: [
+                tmdb.map(|v| ("tmdb".to_string(), v)),
+                imdb.map(|s| ("imdb".to_string(), Value::from(s))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            trailer: None,
+        };
+        // Numeric tmdb tolerated; series vs movie paths differ.
+        let d = holder(Some(Value::from(312849)), Some("tt41278600"));
+        assert_eq!(
+            info_url("tv", &d).as_deref(),
+            Some("https://www.themoviedb.org/tv/312849")
+        );
+        assert_eq!(
+            info_url("movie", &d).as_deref(),
+            Some("https://www.themoviedb.org/movie/312849")
+        );
+        // No tmdb -> tt-prefixed imdb wins.
+        let d = holder(None, Some("tt41278600"));
+        assert_eq!(
+            info_url("tv", &d).as_deref(),
+            Some("https://www.imdb.com/title/tt41278600/")
+        );
+        // Garbage everywhere -> no link (never a broken button).
+        let d = holder(None, Some(""));
+        assert_eq!(info_url("tv", &d), None);
+        let d = holder(None, None);
+        assert_eq!(info_url("movie", &d), None);
+    }
+
+    #[test]
     fn plugin_repeat_play_still_displays() {
-        // Second-play plugin response per xbmc/xbmc#16245: title/season/
-        // showtitle go blank, type drops to "unknown", but label + file
-        // survive. This must still produce a displayable session.
+        // Second-play plugin data (xbmc/xbmc#16245): blank title/season,
+        // `type: "unknown"`, but label + file survive and must display.
         let raw = r#"{
             "id": "VideoGetItem", "jsonrpc": "2.0",
             "result": {"item": {
