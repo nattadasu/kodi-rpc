@@ -138,6 +138,7 @@ pub struct KodiBuilder {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct KodiInstanceBuilder {
+    #[serde(default)]
     pub url: String,
     pub username: Option<String>,
     pub password: Option<String>,
