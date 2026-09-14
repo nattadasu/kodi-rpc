@@ -5,38 +5,74 @@ use discord_rich_presence::{
     activity::{Activity, Assets, Timestamps},
     DiscordIpc, DiscordIpcClient,
 };
-pub use error::JfError;
-pub use jellyfin::{Button, MediaType};
-use jellyfin::{ExternalUrl, NowPlayingItem, PlayTime, RawSession, Session, VirtualFolder};
-use log::{debug, warn};
-use reqwest::header::{HeaderMap, AUTHORIZATION};
-use serde::{Deserialize, Serialize};
-use std::str::FromStr;
-use std::time::SystemTime;
-use url::Url;
+pub use error::KodiError;
 pub use external::image_utils::ImageProcessingOptions;
+use kodi::{
+    get_item_properties, pick_art_poster, pick_season_poster, ActivePlayer, JsonRpcRequest,
+    JsonRpcResponse, MovieDetailsResult, NowPlayingItem, PlayState, PlayTime, PlayerGetItemResult,
+    PlayerGetPropertiesResult, SeasonsResult, TVShowDetailsResult,
+};
+pub use kodi::{Button, MediaType};
+use log::debug;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::str::FromStr;
+use url::Url;
 
 mod error;
 mod external;
-mod jellyfin;
+mod kodi;
 #[cfg(test)]
 mod tests;
 
-pub(crate) type JfResult<T> = Result<T, Box<dyn std::error::Error>>;
+pub(crate) type KodiResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 pub const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 
-/// Client used to interact with jellyfin and discord
+/// Discord activity field limits (discord.com/developers/docs): text fields
+/// cap at 128 chars (min 3, zero-width-padded below that), max 2 buttons
+/// with 32-char labels.
+const MAX_TEXT_LEN: usize = 128;
+const MAX_BUTTON_LABEL_LEN: usize = 32;
+
+/// One Kodi server: URL + HTTP auth + a display name for logs.
+#[derive(Debug, Clone, Default)]
+pub struct InstanceCfg {
+    pub url: String,
+    pub username: String,
+    pub password: String,
+    pub self_signed_cert: bool,
+    pub name: String,
+}
+
+struct KodiInstance {
+    name: String,
+    base: Url,
+    http: reqwest::blocking::Client,
+    direct_art: bool,
+}
+
+/// One poll result from a single instance.
+struct FetchedSession {
+    npi: NowPlayingItem,
+    play_state: PlayState,
+    item_id: String,
+    tvshowid: Option<i32>,
+    movieid: Option<i64>,
+}
+
+/// Client used to interact with Kodi and Discord
 pub struct Client {
     discord_ipc_client: DiscordIpcClient,
-    url: Url,
-    usernames: Vec<String>,
-    reqwest: reqwest::blocking::Client,
+    instances: Vec<KodiInstance>,
     session: Option<Session>,
+    /// Which instance owns the presence (first-plays-wins).
+    session_owner: Option<usize>,
     buttons: Option<Vec<Button>>,
     music_display_options: DisplayOptions,
     movies_display_options: DisplayOptions,
     episodes_display_options: DisplayOptions,
+    unknown_display_options: DisplayOptions,
     blacklist: Blacklist,
     show_paused: bool,
     show_images: bool,
@@ -45,7 +81,11 @@ pub struct Client {
     process_images: bool,
     image_processing_options: external::image_utils::ImageProcessingOptions,
     large_image_text: String,
+    /// Poster lookups per show/season/movie; avoids an extra RPC per poll.
+    poster_cache: HashMap<String, Option<String>>,
 }
+
+use kodi::Session;
 
 impl Client {
     /// Calls the `ClientBuilder::new()` function
@@ -54,90 +94,40 @@ impl Client {
     }
 
     /// Connects to the discord socket
-    pub fn connect(&mut self) -> JfResult<()> {
+    pub fn connect(&mut self) -> KodiResult<()> {
         self.discord_ipc_client.connect()?;
         Ok(())
     }
 
     /// Reconnects to the discord socket
-    pub fn reconnect(&mut self) -> JfResult<()> {
+    pub fn reconnect(&mut self) -> KodiResult<()> {
         self.discord_ipc_client.reconnect()?;
         Ok(())
     }
 
     /// Clears current activity on discord if anything is being displayed
-    ///
-    /// # Example
-    /// ```no_run
-    /// use jellyfin_rpc::Client;
-    ///
-    /// let mut builder = Client::builder();
-    /// builder.api_key("abcd1234")
-    ///     .url("https://jellyfin.example.com")
-    ///     .username("user");
-    ///
-    /// let mut client = builder.build().unwrap();
-    ///
-    /// client.connect().unwrap();
-    ///
-    /// client.set_activity().unwrap();
-    ///
-    /// client.clear_activity().unwrap();
-    /// ```
-    pub fn clear_activity(&mut self) -> JfResult<()> {
+    pub fn clear_activity(&mut self) -> KodiResult<()> {
         self.discord_ipc_client.clear_activity()?;
         Ok(())
     }
 
-    /// Gathers information from jellyfin about what is being played and displays it according to the options supplied to the builder.
-    ///
-    /// # Example
-    /// ```no_run
-    /// use jellyfin_rpc::Client;
-    ///
-    /// let mut builder = Client::builder();
-    /// builder.api_key("abcd1234")
-    ///     .url("https://jellyfin.example.com")
-    ///     .username("user");
-    ///
-    /// let mut client = builder.build().unwrap();
-    ///
-    /// client.connect().unwrap();
-    ///
-    /// client.set_activity().unwrap();
-    /// ```
-    pub fn set_activity(&mut self) -> JfResult<String> {
+    /// Polls Kodi and pushes the presence to Discord. Plugin
+    /// (`type: "unknown"`) streams display like any other content.
+    pub fn set_activity(&mut self) -> KodiResult<String> {
         self.get_session()?;
-
-        // Make sure the blacklist cache is loaded/valid
-        match &self.blacklist.libraries {
-            BlacklistedLibraries::Uninitialized => {
-                self.reload_blacklist();
-            }
-            BlacklistedLibraries::Initialized(_, init_time) => {
-                if SystemTime::now()
-                    .duration_since(*init_time)
-                    .map(|passed| passed.as_secs() > 3600)
-                    .unwrap_or(false)
-                {
-                    debug!("reloading blacklist after cache expiration");
-                    self.reload_blacklist();
-                }
-            }
-        }
 
         if let Some(session) = &self.session {
             if session.now_playing_item.media_type == MediaType::None {
-                return Err(Box::new(JfError::UnrecognizedMediaType));
+                return Err(Box::new(KodiError::UnrecognizedMediaType));
             }
 
             if self.check_blacklist()? {
-                return Err(Box::new(JfError::ContentBlacklist));
+                return Err(Box::new(KodiError::ContentBlacklist));
             }
 
             let mut activity = Activity::new();
 
-            let mut image_url = Url::from_str("https://i.imgur.com/oX6vcds.png")?;
+            let mut image_url = Url::from_str("https://i.imgur.com/koCh16G.png")?;
 
             if session.now_playing_item.media_type == MediaType::LiveTv {
                 image_url = Url::from_str("https://i.imgur.com/XxdHOqm.png")?;
@@ -181,46 +171,48 @@ impl Client {
             }
 
             let buttons: Vec<Button>;
+            let button_names: Vec<String>;
 
             if let Some(b) = self.get_buttons() {
-                // This gets around the value being dropped immediately at the end of this if statement
                 buttons = b;
+                button_names = buttons
+                    .iter()
+                    .map(|b| b.name.chars().take(MAX_BUTTON_LABEL_LEN).collect())
+                    .collect();
                 activity = activity.buttons(
                     buttons
                         .iter()
-                        .map(|b| ActButton::new(&b.name, &b.url))
+                        .zip(button_names.iter())
+                        .map(|(b, name)| ActButton::new(name, &b.url))
                         .collect(),
                 );
             }
 
             let mut state = self.get_state();
 
-            if state.len() > 128 {
-                state = state.chars().take(128).collect();
+            if state.len() > MAX_TEXT_LEN {
+                state = state.chars().take(MAX_TEXT_LEN).collect();
             } else if state.len() < 3 {
-                // Add three zero width joiners due to discord requiring a minimum length of 3 chars in statuses
                 state += "‎‎‎";
             }
 
             let mut details = self.get_details();
 
-            if details.len() > 128 {
-                details = details.chars().take(128).collect();
+            if details.len() > MAX_TEXT_LEN {
+                details = details.chars().take(MAX_TEXT_LEN).collect();
             } else if details.len() < 3 {
-                // add three (3) zero width joiners
                 details += "‎‎‎";
             }
 
             let mut image_text = self.get_image_text();
 
             if image_text.is_empty() {
-                image_text = format!("Jellyfin-RPC v{}", VERSION.unwrap_or("UNKNOWN"));
+                image_text = format!("Kodi-RPC v{}", VERSION.unwrap_or("UNKNOWN"));
             }
 
-            if image_text.len() > 128 {
-                image_text = image_text.chars().take(128).collect();
+            if image_text.len() > MAX_TEXT_LEN {
+                image_text = image_text.chars().take(MAX_TEXT_LEN).collect();
             } else if image_text.len() < 3 {
-                // add three zero width joiners
                 image_text += "‎‎‎";
             }
 
@@ -250,58 +242,296 @@ impl Client {
         Ok(String::new())
     }
 
-    fn get_session(&mut self) -> JfResult<()> {
-        let sessions: Vec<RawSession> = self
-            .reqwest
-            .get(self.url.join("Sessions")?)
-            .send()?
-            .json()?;
+    fn jsonrpc<T: Serialize, R: for<'de> Deserialize<'de>>(
+        &self,
+        inst: &KodiInstance,
+        method: &'static str,
+        params: T,
+    ) -> KodiResult<R> {
+        let endpoint = inst.base.join("jsonrpc")?;
+        let req = JsonRpcRequest::new(method, params, "kodi-rpc");
+        debug!("Kodi JSON-RPC -> {} {:?} [{}]", method, endpoint, inst.name);
+        let resp: JsonRpcResponse<R> = inst.http.post(endpoint).json(&req).send()?.json()?;
+        resp.result
+            .ok_or_else(|| "kodi json-rpc returned no result".into())
+    }
 
-        debug!("Found {} sessions", sessions.len());
+    /// First-plays-wins arbitration across instances: the owner keeps the
+    /// presence while it plays (even if others start too); once it stops,
+    /// the first playing instance in config order takes over.
+    fn elect_owner(current: Option<usize>, playing: &[bool]) -> Option<usize> {
+        if let Some(o) = current {
+            if playing.get(o).copied().unwrap_or(false) {
+                return Some(o);
+            }
+        }
+        playing.iter().position(|p| *p)
+    }
 
-        self.session = self
-            .usernames
-            .iter()
-            .flat_map(|username| {
-                sessions
-                    .iter()
-                    // find any session(s) for the current priority username
-                    .filter(move |session| {
-                        session.user_name.as_ref().is_some_and(|u| u == username)
-                    })
-            })
-            // take the first valid session
-            .find(|session| Self::is_valid_session(session))
-            .map(|session| session.clone().build());
+    fn get_session(&mut self) -> KodiResult<()> {
+        let mut fetched = Vec::with_capacity(self.instances.len());
+        for idx in 0..self.instances.len() {
+            fetched.push(self.fetch_instance(idx));
+        }
 
+        let playing: Vec<bool> = fetched.iter().map(|f| f.is_some()).collect();
+        match Self::elect_owner(self.session_owner, &playing) {
+            Some(idx) => {
+                if self.session_owner != Some(idx) {
+                    debug!(
+                        "Presence ownership -> instance {} ({})",
+                        idx, self.instances[idx].name
+                    );
+                }
+                self.session_owner = Some(idx);
+                let fs = fetched[idx].take().expect("elected instance is playing");
+                let mut npi = fs.npi;
+                self.populate_poster(
+                    idx,
+                    &mut npi,
+                    fs.tvshowid,
+                    fs.movieid,
+                    self.episodes_display_options.poster_source,
+                );
+                self.session = Some(Session {
+                    now_playing_item: npi,
+                    play_state: fs.play_state,
+                    item_id: fs.item_id,
+                    source: idx,
+                });
+            }
+            None => {
+                if self.session_owner.is_some() {
+                    debug!("All instances idle; clearing presence ownership");
+                }
+                self.session_owner = None;
+                self.session = None;
+            }
+        }
         Ok(())
     }
 
-    /// Validate that the session we're checking has a now playing item, a play state, and is not a
-    /// theme song.
-    fn is_valid_session(session: &RawSession) -> bool {
-        if let RawSession {
-            now_playing_item: Some(now_playing_item),
-            play_state: Some(_),
-            ..
-        } = session
-        {
-            debug!("NowPlayingItem exists");
-            debug!("PlayState exists");
+    /// Poll one instance. Dead/unreachable instances yield None so the rest
+    /// keep working.
+    fn fetch_instance(&self, idx: usize) -> Option<FetchedSession> {
+        let inst = &self.instances[idx];
 
-            if now_playing_item
-                .extra_type
-                .as_ref()
-                .is_some_and(|et| et == "ThemeSong")
-            {
-                debug!("Session is playing a theme song, continuing loop");
-                false
-            } else {
-                true
-            }
-        } else {
-            false
+        #[derive(Serialize)]
+        struct EmptyParams {}
+
+        let players: Vec<ActivePlayer> =
+            match self.jsonrpc(inst, "Player.GetActivePlayers", EmptyParams {}) {
+                Ok(p) => p,
+                Err(e) => {
+                    debug!("[{}] Player.GetActivePlayers failed: {}", inst.name, e);
+                    return None;
+                }
+            };
+
+        debug!("[{}] Found {} active players", inst.name, players.len());
+
+        if players.is_empty() {
+            return None;
         }
+
+        // Prefer video over audio over picture (Kodi can run music + slideshow
+        // at the same time).
+        let mut sorted = players.clone();
+        sorted.sort_by_key(|p| match p.player_type.as_str() {
+            "video" => 0,
+            "audio" => 1,
+            _ => 2,
+        });
+
+        for active in sorted {
+            #[derive(Serialize)]
+            struct ItemParams {
+                playerid: i32,
+                properties: Vec<&'static str>,
+            }
+            #[derive(Serialize)]
+            struct PropsParams {
+                playerid: i32,
+                properties: Vec<&'static str>,
+            }
+
+            let item_res: Result<PlayerGetItemResult, _> = self.jsonrpc(
+                inst,
+                "Player.GetItem",
+                ItemParams {
+                    playerid: active.playerid,
+                    properties: get_item_properties(),
+                },
+            );
+            let props_res: Result<PlayerGetPropertiesResult, _> = self.jsonrpc(
+                inst,
+                "Player.GetProperties",
+                PropsParams {
+                    playerid: active.playerid,
+                    properties: vec!["speed", "time", "totaltime", "percentage"],
+                },
+            );
+
+            let (item_res, props_res) = match (item_res, props_res) {
+                (Ok(i), Ok(p)) => (i, p),
+                (Err(e), _) | (_, Err(e)) => {
+                    debug!(
+                        "[{}] Skipping player {} ({}): {}",
+                        inst.name, active.playerid, active.player_type, e
+                    );
+                    continue;
+                }
+            };
+
+            debug!(
+                "[{}] Player {} ({}): type={} label={} file={}",
+                inst.name,
+                active.playerid,
+                active.player_type,
+                item_res.item.item_type,
+                item_res.item.label,
+                item_res.item.file.as_deref().unwrap_or("")
+            );
+
+            if let Some(npi) =
+                NowPlayingItem::from_kodi(&item_res.item, &props_res, &active.player_type)
+            {
+                // Image-cache key: the file path works for library and plugin items.
+                let item_id = npi.id.clone();
+                return Some(FetchedSession {
+                    npi,
+                    play_state: PlayState::from_props(&props_res),
+                    item_id,
+                    tvshowid: item_res.item.tvshowid.filter(|v| *v >= 0),
+                    movieid: item_res.item.id.filter(|v| *v >= 0),
+                });
+            } else {
+                debug!(
+                    "[{}] Player {} has nothing displayable, trying next player",
+                    inst.name, active.playerid
+                );
+            }
+        }
+
+        None
+    }
+
+    /// Fill `poster` from the library (series/season/movie). Never fails the
+    /// session: no IDs / RPC errors just keep the still/fanart fallbacks.
+    fn populate_poster(
+        &mut self,
+        inst_idx: usize,
+        npi: &mut NowPlayingItem,
+        tvshowid: Option<i32>,
+        movieid: Option<i64>,
+        source: PosterSource,
+    ) {
+        match npi.media_type {
+            MediaType::Episode => {
+                if source == PosterSource::Episode {
+                    return;
+                }
+                let (Some(tvshowid), Some(season)) = (tvshowid, npi.parent_index_number) else {
+                    return;
+                };
+                let cache_key = format!("{}:tv:{}:s{}:{:?}", inst_idx, tvshowid, season, source);
+                if let Some(cached) = self.poster_cache.get(&cache_key) {
+                    npi.poster = cached.clone();
+                    return;
+                }
+                let poster = if source == PosterSource::Series {
+                    self.fetch_tvshow_poster(inst_idx, tvshowid)
+                } else {
+                    self.fetch_season_poster(inst_idx, tvshowid, season)
+                        .or_else(|| self.fetch_tvshow_poster(inst_idx, tvshowid))
+                };
+                debug!(
+                    "Poster for tvshow {} season {} ({:?}): {}",
+                    tvshowid,
+                    season,
+                    source,
+                    poster.as_deref().unwrap_or("<none>")
+                );
+                self.poster_cache.insert(cache_key, poster.clone());
+                npi.poster = poster;
+            }
+            MediaType::Movie => {
+                let Some(movieid) = movieid else {
+                    return;
+                };
+                let cache_key = format!("{}:movie:{}", inst_idx, movieid);
+                if let Some(cached) = self.poster_cache.get(&cache_key) {
+                    npi.poster = cached.clone();
+                    return;
+                }
+                let poster = self.fetch_movie_poster(inst_idx, movieid);
+                debug!(
+                    "Poster for movie {}: {}",
+                    movieid,
+                    poster.as_deref().unwrap_or("<none>")
+                );
+                self.poster_cache.insert(cache_key, poster.clone());
+                npi.poster = poster;
+            }
+            _ => {}
+        }
+    }
+
+    fn fetch_season_poster(&self, inst_idx: usize, tvshowid: i32, season: i32) -> Option<String> {
+        #[derive(Serialize)]
+        struct Params {
+            tvshowid: i32,
+            properties: Vec<&'static str>,
+        }
+        let res: SeasonsResult = self
+            .jsonrpc(
+                &self.instances[inst_idx],
+                "VideoLibrary.GetSeasons",
+                Params {
+                    tvshowid,
+                    properties: vec!["season", "art"],
+                },
+            )
+            .ok()?;
+        pick_season_poster(&res.seasons, season)
+    }
+
+    fn fetch_tvshow_poster(&self, inst_idx: usize, tvshowid: i32) -> Option<String> {
+        #[derive(Serialize)]
+        struct Params {
+            tvshowid: i32,
+            properties: Vec<&'static str>,
+        }
+        let res: TVShowDetailsResult = self
+            .jsonrpc(
+                &self.instances[inst_idx],
+                "VideoLibrary.GetTVShowDetails",
+                Params {
+                    tvshowid,
+                    properties: vec!["art"],
+                },
+            )
+            .ok()?;
+        pick_art_poster(&res.tvshowdetails.art)
+    }
+
+    fn fetch_movie_poster(&self, inst_idx: usize, movieid: i64) -> Option<String> {
+        #[derive(Serialize)]
+        struct Params {
+            movieid: i64,
+            properties: Vec<&'static str>,
+        }
+        let res: MovieDetailsResult = self
+            .jsonrpc(
+                &self.instances[inst_idx],
+                "VideoLibrary.GetMovieDetails",
+                Params {
+                    movieid,
+                    properties: vec!["art"],
+                },
+            )
+            .ok()?;
+        pick_art_poster(&res.moviedetails.art)
     }
 
     fn get_buttons(&self) -> Option<Vec<Button>> {
@@ -313,12 +543,9 @@ impl Client {
             &session.now_playing_item.external_urls,
             self.buttons.as_ref(),
         ) {
-            let ext_urls: Vec<&ExternalUrl> = ext_urls
+            let ext_urls: Vec<&kodi::ExternalUrl> = ext_urls
                 .iter()
-                .filter(|eu| {
-                    !eu.url.starts_with("http://localhost")
-                        && !eu.url.starts_with("https://localhost")
-                })
+                .filter(|eu| !kodi::is_loopback_url(&eu.url))
                 .collect();
             let mut i = 0;
             for button in buttons {
@@ -351,12 +578,9 @@ impl Client {
             }
             return Some(activity_buttons);
         } else if let Some(ext_urls) = &session.now_playing_item.external_urls {
-            let ext_urls: Vec<&ExternalUrl> = ext_urls
+            let ext_urls: Vec<&kodi::ExternalUrl> = ext_urls
                 .iter()
-                .filter(|eu| {
-                    !eu.url.starts_with("http://localhost")
-                        && !eu.url.starts_with("https://localhost")
-                })
+                .filter(|eu| !kodi::is_loopback_url(&eu.url))
                 .collect();
             for ext_url in ext_urls {
                 if activity_buttons.len() == 2 {
@@ -370,32 +594,107 @@ impl Client {
         None
     }
 
-    fn get_image(&self) -> JfResult<Url> {
+    /// HTTP client of the instance that owns the current session (its
+    /// credentials are the only ones that may download its artwork).
+    fn owner_http(&self) -> KodiResult<&reqwest::blocking::Client> {
+        let idx = self.session.as_ref().map(|s| s.source).unwrap_or(0);
+        self.instances
+            .get(idx)
+            .map(|i| &i.http)
+            .ok_or_else(|| "no kodi instance".into())
+    }
+
+    /// Download the current artwork bytes through the owning instance.
+    fn download_artwork(&self) -> KodiResult<Vec<u8>> {
+        Ok(self
+            .owner_http()?
+            .get(self.artwork_download_url()?)
+            .send()?
+            .bytes()?
+            .to_vec())
+    }
+
+    /// Artwork URL Discord can fetch: plugin/CDN hotlinks always, Kodi
+    /// `image://` only when the owning server is public without auth
+    /// (localhost/LAN URLs would break the whole presence render, so those
+    /// fall back to the default icon — use imgur/litterbox uploads instead).
+    pub fn get_image(&self) -> KodiResult<Url> {
         let session = self.session.as_ref().unwrap();
+        let item = &session.now_playing_item;
+        let inst = &self.instances[session.source];
 
-        let ids: Vec<&str> = if matches!(session.now_playing_item.media_type, MediaType::Music) {
-            vec![&session.now_playing_item.id, &session.item_id]
-        } else {
-            vec![&session.item_id]
-        };
-
-        for id in ids {
-            let path = "Items/".to_string() + id + "/Images/Primary";
-
-            let image_url = self.url.join(&path)?;
-
-            if !self
-                .reqwest
-                .get(image_url.as_ref())
-                .send()?
-                .text()?
-                .contains("does not have an image of type Primary")
-            {
-                return Ok(image_url);
+        for candidate in [
+            item.poster.as_ref(),
+            item.thumbnail.as_ref(),
+            item.fanart.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(u) = Self::resolve_candidate(candidate, &inst.base, inst.direct_art, true) {
+                return Ok(u);
             }
         }
 
-        Err(Box::new(JfError::NoImage))
+        Err(Box::new(KodiError::NoImage))
+    }
+
+    /// Resolve one art candidate. `direct` allows translating Kodi `image://`
+    /// to local `/image/` URLs (upload path only); `https_only` additionally
+    /// refuses plain-http remote art (display path: Discord's proxy can't be
+    /// trusted with it, and a bad `large_image` kills the whole presence).
+    fn resolve_candidate(t: &str, base: &Url, direct: bool, https_only: bool) -> Option<Url> {
+        let t = t.trim();
+        if t.is_empty() {
+            return None;
+        }
+        if let Some(inner) = kodi::unwrap_remote_image(t) {
+            if !https_only || inner.starts_with("https://") {
+                if let Ok(u) = Url::parse(&inner) {
+                    return Some(u);
+                }
+            }
+            return None;
+        }
+        if t.starts_with("https://") || (!https_only && t.starts_with("http://")) {
+            if let Ok(u) = Url::parse(t) {
+                return Some(u);
+            }
+            return None;
+        }
+        if t.starts_with("http://") {
+            return None;
+        }
+        if t.starts_with("image://") && direct {
+            let encoded = urlencoding::encode(t);
+            if let Ok(u) = base.join(&format!("image/{}", encoded)) {
+                return Some(u);
+            }
+        }
+        None
+    }
+
+    /// Raw artwork URL for byte downloads (imgur/litterbox). Always resolves
+    /// `image://` via our authed client; never hand to Discord directly.
+    fn artwork_download_url(&self) -> KodiResult<Url> {
+        let session = self.session.as_ref().unwrap();
+        let item = &session.now_playing_item;
+        let inst = &self.instances[session.source];
+
+        for candidate in [
+            item.poster.as_ref(),
+            item.thumbnail.as_ref(),
+            item.fanart.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(u) = Self::resolve_candidate(candidate, &inst.base, true, false) {
+                return Ok(u);
+            }
+        }
+
+        Err(Box::new(KodiError::NoImage))
     }
 
     fn sanitize_display_format(input: &str) -> String {
@@ -547,35 +846,58 @@ impl Client {
             .unwrap_or(&"".to_string())
             .clone();
 
-        // One episode on Jellyfin can span across multiple actual episodes
-        // For example E01-03 is 3 episodes in one media file
-        let episode_range = (
-            session.now_playing_item.index_number.unwrap_or(0),
-            session.now_playing_item.index_number_end,
-        );
+        let episode = session.now_playing_item.index_number.unwrap_or(0);
         result = result
             .replace("{show-title}", &show_title)
             .replace("{title}", episode_title)
             .replace("{original-title}", &original_title)
-            .replace(
-                "{episode}",
-                &match episode_range {
-                    (first, Some(last)) => format!("{}-{}", first, last),
-                    (episode, None) => format!("{}", episode),
-                },
-            )
-            .replace(
-                "{episode-padded}",
-                &match episode_range {
-                    (first, Some(last)) => format!("{:02}-{:02}", first, last),
-                    (episode, None) => format!("{:02}", episode),
-                },
-            )
+            .replace("{episode}", &episode.to_string())
+            .replace("{episode-padded}", &format!("{:02}", episode))
             .replace("{season}", &season.to_string())
             .replace("{season-padded}", &format!("{:02}", season))
             .replace("{year}", &year)
             .replace("{genres}", &genres)
             .replace("{studio}", &studio)
+            .replace("{version}", VERSION.unwrap_or("UNKNOWN"));
+
+        Self::sanitize_display_format(&result).replace("{sep}", separator)
+    }
+
+    fn parse_unknown_display(&self, input: &str) -> String {
+        let mut result = input.trim().to_string();
+        let session = self.session.as_ref().unwrap();
+        let item = &session.now_playing_item;
+
+        let separator = &self.unknown_display_options.separator;
+        let addon = item
+            .addon_id
+            .as_ref()
+            .map(|a| a.rsplit('.').next().unwrap_or(a).to_string())
+            .unwrap_or_default();
+        let addon_full = item.addon_id.clone().unwrap_or_default();
+        let file_host = item.file_host_display();
+        let genres = item
+            .genres
+            .as_ref()
+            .unwrap_or(&vec!["".to_string()])
+            .join(", ");
+        let year = item
+            .production_year
+            .map(|y| y.to_string())
+            .unwrap_or_default();
+        let studio = item.series_studio.clone().unwrap_or_default();
+        let plot = item.plot.clone().unwrap_or_default();
+
+        result = result
+            .replace("{title}", &item.name)
+            .replace("{label}", &item.label)
+            .replace("{addon}", &addon)
+            .replace("{addon-full}", &addon_full)
+            .replace("{file-host}", &file_host)
+            .replace("{genres}", &genres)
+            .replace("{year}", &year)
+            .replace("{studio}", &studio)
+            .replace("{plot}", &plot)
             .replace("{version}", VERSION.unwrap_or("UNKNOWN"));
 
         Self::sanitize_display_format(&result).replace("{sep}", separator)
@@ -630,6 +952,19 @@ impl Client {
                 .as_ref()
                 .map(|a| a.to_string())
                 .unwrap_or_else(|| session.now_playing_item.name.to_string()),
+            MediaType::Unknown => {
+                let display_details_format = &self
+                    .unknown_display_options
+                    .display
+                    .details_text
+                    .as_ref()
+                    .unwrap();
+                self.parse_unknown_display(
+                    display_details_format
+                        .replace("{__default}", "{title}")
+                        .as_str(),
+                )
+            }
             _ => session.now_playing_item.name.to_string(),
         }
     }
@@ -649,7 +984,14 @@ impl Client {
                     display_state_format.replace("{__default}", "").as_str(),
                 )
             }
-            MediaType::LiveTv => "Live TV".to_string(),
+            MediaType::LiveTv => {
+                // Prefer the channel name when Kodi provides one.
+                if !session.now_playing_item.name.is_empty() {
+                    format!("Live TV - {}", session.now_playing_item.name)
+                } else {
+                    "Live TV".to_string()
+                }
+            }
             MediaType::Music => {
                 let display_state_format = &self
                     .music_display_options
@@ -709,6 +1051,24 @@ impl Client {
                     .unwrap();
                 self.parse_movies_display(display_state_format.replace("{__default}", "").as_str())
             }
+            MediaType::Unknown => {
+                let display_state_format = &self
+                    .unknown_display_options
+                    .display
+                    .state_text
+                    .as_ref()
+                    .unwrap();
+                let fallback = if session.now_playing_item.is_plugin {
+                    "via {addon} {sep} {file-host}".to_string()
+                } else {
+                    "".to_string()
+                };
+                self.parse_unknown_display(
+                    display_state_format
+                        .replace("{__default}", &fallback)
+                        .as_str(),
+                )
+            }
             _ => session
                 .now_playing_item
                 .genres
@@ -724,6 +1084,7 @@ impl Client {
             MediaType::Episode => self.episodes_display_options.status_display_type.clone(),
             MediaType::Movie => self.movies_display_options.status_display_type.clone(),
             MediaType::Music => self.music_display_options.status_display_type.clone(),
+            MediaType::Unknown => self.unknown_display_options.status_display_type.clone(),
             _ => Default::default(),
         }
     }
@@ -759,11 +1120,20 @@ impl Client {
                     .unwrap();
                 self.parse_episodes_display(display_image_format)
             }
+            MediaType::Unknown => {
+                let display_image_format = &self
+                    .unknown_display_options
+                    .display
+                    .image_text
+                    .as_ref()
+                    .unwrap();
+                self.parse_unknown_display(display_image_format)
+            }
             _ => "".to_string(),
         }
     }
 
-    fn check_blacklist(&self) -> JfResult<bool> {
+    fn check_blacklist(&self) -> KodiResult<bool> {
         let session = self.session.as_ref().unwrap();
 
         if self
@@ -781,35 +1151,6 @@ impl Client {
 
         Ok(false)
     }
-
-    /// Fetch the virtual folder list and filter out the blacklisted libraries
-    fn fetch_blacklist(&self) -> JfResult<Vec<VirtualFolder>> {
-        let virtual_folders: Vec<VirtualFolder> = self
-            .reqwest
-            .get(self.url.join("Library/VirtualFolders")?)
-            .send()?
-            .json()?;
-
-        Ok(virtual_folders
-            .into_iter()
-            .filter(|library_folder| {
-                self.blacklist
-                    .libraries_names
-                    .contains(library_folder.name.as_ref().unwrap_or(&String::new()))
-            })
-            .collect())
-    }
-
-    /// Reload the library list from Jellyfin and filter out the user-provided blacklisted libraries
-    fn reload_blacklist(&mut self) {
-        self.blacklist.libraries = match self.fetch_blacklist() {
-            Ok(blacklist) => BlacklistedLibraries::Initialized(blacklist, SystemTime::now()),
-            Err(err) => {
-                warn!("Failed to intialize blacklist: {}", err);
-                BlacklistedLibraries::Uninitialized
-            }
-        }
-    }
 }
 
 pub struct EpisodeDisplayOptions {
@@ -822,6 +1163,29 @@ struct DisplayOptions {
     separator: String,
     display: DisplayFormat,
     status_display_type: StatusType,
+    poster_source: PosterSource,
+}
+
+/// Which artwork episodes use for the presence image.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum PosterSource {
+    /// Season poster, falling back to the series poster (default).
+    #[default]
+    Season,
+    /// Series poster only (no season lookup).
+    Series,
+    /// Episode still only (no poster lookups at all).
+    Episode,
+}
+
+impl From<String> for PosterSource {
+    fn from(v: String) -> Self {
+        match v.to_lowercase().as_str() {
+            "series" => Self::Series,
+            "episode" | "still" => Self::Episode,
+            _ => Self::Season,
+        }
+    }
 }
 
 /// Represents the formatting details for `Display`.
@@ -839,7 +1203,7 @@ pub struct DisplayFormat {
 impl From<Vec<String>> for DisplayFormat {
     fn from(items: Vec<String>) -> Self {
         let details_text = "{__default}".to_string();
-        let image_text = "Jellyfin-RPC v{version}".to_string();
+        let image_text = "Kodi-RPC v{version}".to_string();
         let mut state_text = "{__default}".to_string();
 
         let items_joined = items
@@ -890,7 +1254,7 @@ impl From<EpisodeDisplayOptions> for DisplayFormat {
                 format!("{}{}{} {}", season_tag, divider, episode_tag, "{title}")
             }
         };
-        let image_text = "Jellyfin-RPC v{version}".to_string();
+        let image_text = "Kodi-RPC v{version}".to_string();
 
         DisplayFormat {
             details_text: Some(details_text),
@@ -952,16 +1316,14 @@ impl TryFrom<String> for StatusType {
 struct Blacklist {
     media_types: Vec<MediaType>,
     libraries_names: Vec<String>,
-    libraries: BlacklistedLibraries,
-}
-
-enum BlacklistedLibraries {
-    Uninitialized,
-    Initialized(Vec<VirtualFolder>, SystemTime),
 }
 
 impl Blacklist {
-    /// Check whether a [NowPlayingItem] is in a blacklisted library
+    /// Check whether a [NowPlayingItem] is blacklisted.
+    ///
+    /// Unlike Jellyfin there is no VirtualFolders API to resolve: `libraries`
+    /// entries are matched as case-insensitive substrings against the Kodi
+    /// `file` path (works for `plugin://`, `smb://`, local paths, ...).
     fn check_item(&self, playing_item: &NowPlayingItem) -> bool {
         debug!("Checking if an item is blacklisted: {}", playing_item.name);
         self.check_path(playing_item.path.as_ref().unwrap_or(&String::new()))
@@ -969,18 +1331,15 @@ impl Blacklist {
 
     /// Check whether a path is in a blacklisted library
     fn check_path(&self, item_path: &str) -> bool {
-        match &self.libraries {
-            BlacklistedLibraries::Initialized(libraries, _) => {
-                debug!("Checking path: {}", item_path);
-                libraries.iter().any(|blacklisted_mf| {
-                    blacklisted_mf.locations.iter().any(|physical_folder| {
-                        debug!("BL path: {}", physical_folder);
-                        item_path.starts_with(physical_folder)
-                    })
-                })
-            }
-            BlacklistedLibraries::Uninitialized => false,
+        let hay = item_path.to_lowercase();
+        let hit = self.libraries_names.iter().any(|lib| {
+            let needle = lib.to_lowercase();
+            !needle.is_empty() && hay.contains(&needle)
+        });
+        if hit {
+            debug!("Blacklisted path hit: {}", item_path);
         }
+        hit
     }
 }
 
@@ -999,10 +1358,11 @@ struct LitterboxOptions {
 #[derive(Default)]
 pub struct ClientBuilder {
     url: String,
+    username: String,
+    password: String,
     client_id: String,
-    api_key: String,
     self_signed: bool,
-    usernames: Vec<String>,
+    extra_instances: Vec<InstanceCfg>,
     buttons: Option<Vec<Button>>,
     episode_divider: bool,
     episode_prefix: bool,
@@ -1016,6 +1376,10 @@ pub struct ClientBuilder {
     episodes_separator: String,
     episodes_display: DisplayFormat,
     episodes_status_display_type: StatusType,
+    episodes_poster_source: PosterSource,
+    unknown_separator: String,
+    unknown_display: DisplayFormat,
+    unknown_status_display_type: StatusType,
     blacklist_media_types: Vec<MediaType>,
     blacklist_libraries: Vec<String>,
     show_paused: bool,
@@ -1048,6 +1412,12 @@ impl ClientBuilder {
                 prefix: true,
                 simple: false,
             }),
+            unknown_separator: "-".to_string(),
+            unknown_display: DisplayFormat {
+                details_text: Some("{title}".to_string()),
+                state_text: Some("via {addon} {sep} {file-host}".to_string()),
+                image_text: Some("Kodi-RPC v{version}".to_string()),
+            },
             show_paused: true,
             process_images: true,
             image_background: true,
@@ -1057,99 +1427,61 @@ impl ClientBuilder {
         }
     }
 
-    /// Jellyfin URL to be used by the client.
-    ///
-    /// Has no default.
+    /// Kodi base URL (e.g. `https://kodi.example.com` or `http://localhost:8080`).
     pub fn url<T: Into<String>>(&mut self, url: T) -> &mut Self {
         self.url = url.into();
         self
     }
 
+    /// HTTP username for Kodi (`Settings → Services → Control`).
+    /// Empty = no auth.
+    pub fn username<T: Into<String>>(&mut self, username: T) -> &mut Self {
+        self.username = username.into();
+        self
+    }
+
+    /// HTTP password for Kodi. Empty = no auth.
+    pub fn password<T: Into<String>>(&mut self, password: T) -> &mut Self {
+        self.password = password.into();
+        self
+    }
+
     /// Discord Application ID that the client will use when connecting to Discord.
-    ///
-    /// Defaults to `"1053747938519679018"`.
     pub fn client_id<T: Into<String>>(&mut self, client_id: T) -> &mut Self {
         self.client_id = client_id.into();
         self
     }
 
-    /// Jellyfin API Key that will be used to gather data about what is being played.
-    ///
-    /// Has no default.
-    pub fn api_key<T: Into<String>>(&mut self, api_key: T) -> &mut Self {
-        self.api_key = api_key.into();
-        self
-    }
-
     /// Controls the use of certificate validation in reqwest.
-    ///
-    /// Defaults to `false`.
     pub fn self_signed(&mut self, self_signed: bool) -> &mut Self {
         self.self_signed = self_signed;
         self
     }
 
-    /// Usernames that should be matched when checking Jellyfin sessions.
-    ///
-    /// Has no default.
-    ///
-    /// # Warning
-    /// This overwrites the value set in `ClientBuilder::Username()`,
-    /// only one of these 2 should be used
-    pub fn usernames(&mut self, usernames: Vec<String>) -> &mut Self {
-        self.usernames = usernames;
-        self
-    }
-
-    /// same as `ClientBuilder::Usernames()` but will only accept a single username
-    ///
-    /// Has no default.
-    ///
-    /// # Warning
-    /// This overwrites the value set in `ClientBuilder::Usernames()`,
-    /// only one of these 2 should be used
-    pub fn username<T: Into<String>>(&mut self, username: T) -> &mut Self {
-        self.usernames = vec![username.into()];
+    /// Extra Kodi servers to watch. The primary server (from `url`) plus
+    /// these are polled every cycle; whichever plays first owns the presence
+    /// until it stops.
+    pub fn instances(&mut self, instances: Vec<InstanceCfg>) -> &mut Self {
+        self.extra_instances.extend(instances);
         self
     }
 
     /// buttons to be displayed on the activity.
-    /// Pass an empty `Vec::new()` to display no buttons
-    ///
-    /// Defaults to dynamic buttons generated from the Jellyfin session.
     pub fn buttons(&mut self, buttons: Vec<Button>) -> &mut Self {
         self.buttons = Some(buttons);
         self
     }
 
-    /// Splits season and episode numbers with a dash.
-    ///
-    /// Defaults to `false`.
-    ///
-    /// # Example
-    /// S1E1 Pilot -> S1 - E1 Pilot
     pub fn episode_divider(&mut self, val: bool) -> &mut Self {
         self.episode_divider = val;
         self
     }
 
-    /// Adds leading 0's to season and episode numbers.
-    ///
-    /// Defaults to `false`.
-    ///
-    /// # Example
-    /// S1E1 Pilot -> S01E01 Pilot
     pub fn episode_prefix(&mut self, val: bool) -> &mut Self {
         self.episode_prefix = val;
         self
     }
 
-    /// Removes the episode name from the activity.
-    ///
-    /// Defaults to `false`.
-    ///
-    /// # Example
-    /// S1E1 Pilot -> S1E1
     pub fn episode_simple(&mut self, val: bool) -> &mut Self {
         self.episode_simple = val;
         self
@@ -1200,124 +1532,107 @@ impl ClientBuilder {
         self
     }
 
+    /// Episode artwork: season poster (default), series poster, or still.
+    pub fn episodes_poster_source(&mut self, source: PosterSource) -> &mut Self {
+        self.episodes_poster_source = source;
+        self
+    }
+
+    pub fn unknown_separator<T: Into<String>>(&mut self, separator: T) -> &mut Self {
+        self.unknown_separator = separator.into();
+        self
+    }
+
+    pub fn unknown_display(&mut self, display: DisplayFormat) -> &mut Self {
+        self.unknown_display = display;
+        self
+    }
+
+    pub fn unknown_status_display_type(&mut self, status_type: StatusType) -> &mut Self {
+        self.unknown_status_display_type = status_type;
+        self
+    }
+
     /// Blacklist certain `MediaType`s so they don't display.
-    ///
-    /// Defaults to `Vec::new()`.
     pub fn blacklist_media_types(&mut self, media_types: Vec<MediaType>) -> &mut Self {
         self.blacklist_media_types = media_types;
         self
     }
 
-    /// Blacklist certain libraries so they don't display.
-    ///
-    /// Defaults to `Vec::new()`.
+    /// Blacklist path substrings (matched against the Kodi `file` path,
+    /// e.g. `"plugin.video.foo"`, `"Kids"`, `"smb://nas/adult"`).
     pub fn blacklist_libraries(&mut self, libraries: Vec<String>) -> &mut Self {
         self.blacklist_libraries = libraries;
         self
     }
 
     /// Show activity when paused.
-    ///
-    /// Defaults to `true`.
     pub fn show_paused(&mut self, val: bool) -> &mut Self {
         self.show_paused = val;
         self
     }
 
-    /// Show images from jellyfin on the activity.
-    ///
-    /// Defaults to `false`.
+    /// Show images from Kodi on the activity.
     pub fn show_images(&mut self, val: bool) -> &mut Self {
         self.show_images = val;
         self
     }
 
-    /// Use imgur for images, uploads images from jellyfin to imgur and stores the imgur links in a local cache
-    ///
-    /// Defaults to `false`.
+    /// Use imgur for images
     pub fn use_imgur(&mut self, val: bool) -> &mut Self {
         self.use_imgur = val;
         self
     }
 
-    /// Imgur client id, used to upload images through their API.
-    ///
-    /// Empty by default.
+    /// Imgur client id
     pub fn imgur_client_id<T: Into<String>>(&mut self, client_id: T) -> &mut Self {
         self.imgur_client_id = client_id.into();
         self
     }
 
-    /// Where to store the URLs to images uploaded to imgur.
-    /// Having this cache lets you avoid uploading the same image several times to their service.
-    ///
-    /// Empty by default.
-    ///
-    /// # Warning
-    /// Setting this to something like `/dev/null` is **NOT** recommended,
-    /// jellyfin-rpc will upload the image every time you call `Client::set_activity()`
-    /// if it can't find the image its looking for in the cache.
     pub fn imgur_urls_file_location<T: Into<String>>(&mut self, location: T) -> &mut Self {
         self.imgur_urls_file_location = location.into();
         self
     }
 
-    /// Use litterbox.catbox.moe for images, uploads images from jellyfin to litterbox and stores the litterbox links in a local cache
-    ///
-    /// Defaults to `false`.
+    /// Use litterbox.catbox.moe for images
     pub fn use_litterbox(&mut self, val: bool) -> &mut Self {
         self.use_litterbox = val;
         self
     }
 
-    /// Where to store the URLs to images uploaded to litterbox.
-    /// Having this cache lets you avoid uploading the same image several times to their service.
-    ///
-    /// Empty by default.
     pub fn litterbox_urls_file_location<T: Into<String>>(&mut self, location: T) -> &mut Self {
         self.litterbox_urls_file_location = location.into();
         self
     }
 
     /// Process images before uploading to imgur or litterbox
-    ///
-    /// Defaults to `true`.
     pub fn process_images(&mut self, val: bool) -> &mut Self {
         self.process_images = val;
         self
     }
 
-    /// Set the size of the processed image (e.g., 512 for 512x512px).
-    /// Default: uses original image's largest dimension.
     pub fn image_size(&mut self, size: Option<u32>) -> &mut Self {
         self.image_size = size;
         self
     }
 
-    /// Enable or disable the blurred background for processed images.
-    /// Defaults to `true`. When disabled the background is transparent.
     pub fn image_background(&mut self, val: bool) -> &mut Self {
         self.image_background = val;
         self
     }
 
-    /// Set the blur radius for the background image as a percentage of canvas size.
-    /// Valid range: 0-50. Defaults to `3.0`.
     pub fn image_background_blur(&mut self, blur: f32) -> &mut Self {
         self.image_background_blur = blur;
         self
     }
 
-    /// Set the rounded corner radius as a percentage of the image size.
-    /// Only applied when background is disabled. Defaults to `4.0`.
     pub fn image_corner_radius(&mut self, radius: Option<f32>) -> &mut Self {
         self.image_corner_radius = radius;
         self
     }
 
     /// Text to be displayed when hovering the large activity image in Discord
-    ///
-    /// Empty by default
     pub fn large_image_text<T: Into<String>>(&mut self, text: T) -> &mut Self {
         self.large_image_text = text.into();
         self
@@ -1325,59 +1640,93 @@ impl ClientBuilder {
 
     /// Builds a client from the options specified in the builder.
     ///
-    /// # Example
-    /// ```
-    /// use jellyfin_rpc::ClientBuilder;
-    ///
-    /// let mut builder = ClientBuilder::new();
-    /// builder.api_key("abcd1234")
-    ///     .url("https://jellyfin.example.com")
-    ///     .username("user");
-    ///
-    /// let mut client = builder.build().unwrap();
-    /// ```
-    pub fn build(self) -> JfResult<Client> {
-        if self.url.is_empty() || self.usernames.is_empty() || self.api_key.is_empty() {
-            return Err(Box::new(JfError::MissingRequiredValues));
+    /// The primary server comes from [`ClientBuilder::url`] (+ credentials);
+    /// [`ClientBuilder::instances`] appends more. At least one usable server
+    /// is required.
+    pub fn build(self) -> KodiResult<Client> {
+        let mut cfgs: Vec<InstanceCfg> = Vec::new();
+        if !self.url.is_empty() {
+            cfgs.push(InstanceCfg {
+                url: self.url.clone(),
+                username: self.username.clone(),
+                password: self.password.clone(),
+                self_signed_cert: self.self_signed,
+                name: String::new(),
+            });
+        }
+        cfgs.extend(self.extra_instances.clone());
+
+        if cfgs.is_empty() {
+            return Err(Box::new(KodiError::MissingRequiredValues));
         }
 
-        let mut headers = HeaderMap::new();
+        let mut instances = Vec::with_capacity(cfgs.len());
+        for cfg in cfgs {
+            if cfg.url.is_empty() {
+                continue;
+            }
+            let mut base: Url = cfg.url.parse()?;
+            // Trailing slash so `join("jsonrpc")` never drops the last path
+            // segment of reverse-proxied hosts.
+            if !base.path().ends_with('/') {
+                let with_slash = format!("{}/", base.as_str().trim_end_matches('/'));
+                base = with_slash.parse()?;
+            }
+            let name = if cfg.name.is_empty() {
+                base.as_str().trim_end_matches('/').to_string()
+            } else {
+                cfg.name.clone()
+            };
+            instances.push(KodiInstance {
+                direct_art: base_allows_direct_art(&base, &cfg.username),
+                http: build_kodi_http_client(
+                    &base,
+                    &cfg.username,
+                    &cfg.password,
+                    cfg.self_signed_cert,
+                )?,
+                base,
+                name,
+            });
+        }
 
-        headers.insert(
-            AUTHORIZATION,
-            format!("MediaBrowser Token=\"{}\"", self.api_key).parse()?,
-        );
-        headers.insert("X-Emby-Token", self.api_key.parse()?);
+        if instances.is_empty() {
+            return Err(Box::new(KodiError::MissingRequiredValues));
+        }
 
         Ok(Client {
             discord_ipc_client: DiscordIpcClient::new(&self.client_id),
-            url: self.url.parse()?,
-            reqwest: reqwest::blocking::Client::builder()
-                .default_headers(headers)
-                .danger_accept_invalid_certs(self.self_signed)
-                .build()?,
-            usernames: self.usernames,
-            buttons: self.buttons,
+            instances,
             session: None,
+            session_owner: None,
+            buttons: self.buttons,
             music_display_options: DisplayOptions {
                 separator: self.music_separator,
                 display: self.music_display,
                 status_display_type: self.music_status_display_type,
+                poster_source: PosterSource::default(),
             },
             movies_display_options: DisplayOptions {
                 separator: self.movies_separator,
                 display: self.movies_display,
                 status_display_type: self.movies_status_display_type,
+                poster_source: PosterSource::default(),
             },
             episodes_display_options: DisplayOptions {
                 separator: self.episodes_separator,
                 display: self.episodes_display,
                 status_display_type: self.episodes_status_display_type,
+                poster_source: self.episodes_poster_source,
+            },
+            unknown_display_options: DisplayOptions {
+                separator: self.unknown_separator,
+                display: self.unknown_display,
+                status_display_type: self.unknown_status_display_type,
+                poster_source: PosterSource::default(),
             },
             blacklist: Blacklist {
                 media_types: self.blacklist_media_types,
                 libraries_names: self.blacklist_libraries,
-                libraries: BlacklistedLibraries::Uninitialized,
             },
             show_paused: self.show_paused,
             show_images: self.show_images,
@@ -1398,6 +1747,101 @@ impl ClientBuilder {
                 corner_radius: self.image_corner_radius,
             },
             large_image_text: self.large_image_text,
+            poster_cache: HashMap::new(),
         })
     }
+}
+
+/// True only for a publicly reachable Kodi without HTTP auth.
+fn base_allows_direct_art(base: &Url, username: &str) -> bool {
+    if !username.is_empty() {
+        return false;
+    }
+    let host = match base.host_str() {
+        Some(h) => h.trim_end_matches('.').to_lowercase(),
+        None => return false,
+    };
+    if host.is_empty()
+        || host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || host == "invalid"
+        || host.ends_with(".invalid")
+    {
+        return false;
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        match ip {
+            std::net::IpAddr::V4(v4) => {
+                if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+                {
+                    return false;
+                }
+            }
+            std::net::IpAddr::V6(v6) => {
+                if v6.is_loopback() || v6.is_unspecified() {
+                    return false;
+                }
+                // unique local fc00::/7
+                if (v6.segments()[0] & 0xfe00) == 0xfc00 {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+fn build_kodi_http_client(
+    _base: &Url,
+    username: &str,
+    password: &str,
+    self_signed: bool,
+) -> KodiResult<reqwest::blocking::Client> {
+    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+    use std::time::Duration;
+
+    let mut headers = HeaderMap::new();
+    if !username.is_empty() {
+        // Minimal base64 to avoid adding a dependency (Kodi uses HTTP Basic).
+        let encoded = base64_encode(&format!("{}:{}", username, password));
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Basic {}", encoded))?,
+        );
+    }
+
+    Ok(reqwest::blocking::Client::builder()
+        .default_headers(headers)
+        .danger_accept_invalid_certs(self_signed)
+        // Bound every RPC: one stalled instance must never freeze polling.
+        .timeout(Duration::from_secs(10))
+        .build()?)
+}
+
+// Small, dependency-free base64 encoder (standard alphabet, padded).
+fn base64_encode(input: &str) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(((bytes.len() + 2) / 3) * 4);
+    for chunk in bytes.chunks(3) {
+        let mut buf = [0u8; 3];
+        for (i, b) in chunk.iter().enumerate() {
+            buf[i] = *b;
+        }
+        let n = ((buf[0] as u32) << 16) | ((buf[1] as u32) << 8) | (buf[2] as u32);
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
 }

@@ -34,21 +34,21 @@ path = ""
 
 if platform.system() != "Windows":
     if os.environ.get("XDG_CONFIG_HOME"):
-        path = os.environ["XDG_CONFIG_HOME"].removesuffix("/") + "/jellyfin-rpc/"
+        path = os.environ["XDG_CONFIG_HOME"].removesuffix("/") + "/kodi-rpc/"
     else:
-        path = os.environ["HOME"].removesuffix("/") + "/.config/jellyfin-rpc/"
+        path = os.environ["HOME"].removesuffix("/") + "/.config/kodi-rpc/"
 
     subprocess.run(["mkdir", "-p", path])
 else:
-    path = os.environ["APPDATA"].removesuffix("\\") + "\\jellyfin-rpc\\"
+    path = os.environ["APPDATA"].removesuffix("\\") + "\\kodi-rpc\\"
     subprocess.run(
         ["powershell", "-NoProfile", "-Command", f'mkdir "{path}"'],
         stdout=subprocess.DEVNULL,
     )
 
 print("""
-Welcome to the Jellyfin-RPC installer
-[https://github.com/Radiicall/jellyfin-rpc#Setup]
+Welcome to the Kodi-RPC installer
+[https://github.com/nattadasu/kodi-rpc#Setup]
 """)
 
 config_path = path + "main.json"
@@ -65,13 +65,14 @@ if os.path.isfile(config_path):
         use_existing = confirm(message="Use existing config?", default=False)
 
 if not use_existing:
-    print("----------Jellyfin----------")
-    url = input("URL (include http/https): ")
-    api_key = input(f"API key [Create one here: {url}/web/index.html#/dashboard/keys]: ")
-    print(
-        "Enter a single username or enter multiple usernames in a comma separated list."
-    )
-    username = input("username[s]: ").split(",")
+    print("----------Kodi----------")
+    url = input("Kodi URL (include http/https, e.g. http://localhost:8080): ")
+    print("Kodi HTTP auth (Settings -> Services -> Control). Leave blank for none.")
+    username = input("username [Default: kodi]: ")
+    if username == "":
+        username = "kodi"
+    import getpass
+    password = getpass.getpass("password (blank for none): ")
 
     self_signed_cert = None
     if url.startswith("https://"):
@@ -138,11 +139,11 @@ if not use_existing:
 
         print("Media types 1/2")
         media_types = input(
-            "Valid types are music, movie, episode and/or livetv [Default: ]: "
+            "Valid types are music, movie, episode, livetv and/or unknown [Default: ]: "
         ).split(",")
 
-        print("Libraries 2/2")
-        libraries = input("Enter libraries to blacklist [Default: ]: ").split(",")
+        print("Libraries 2/2 (matched as substrings against the Kodi file path, e.g. plugin.video.foo)")
+        libraries = input("Enter path substrings to blacklist [Default: ]: ").split(",")
 
         blacklist = {"media_types": media_types, "libraries": libraries}
     else:
@@ -160,10 +161,10 @@ if not use_existing:
         "Do you want to add a divider between numbers, ex. S01 - E01?", default=False, direct=True
     )
 
-    jellyfin = {
+    kodi = {
         "url": url,
-        "api_key": api_key,
         "username": username,
+        "password": password,
         "music": music,
         "movies": movies,
         "blacklist": blacklist,
@@ -234,7 +235,7 @@ if not use_existing:
     discord = {"application_id": appid, "buttons": buttons, "show_paused": show_paused}
 
     config = {
-        "jellyfin": jellyfin,
+        "kodi": kodi,
         "discord": discord,
         "imgur": imgur,
         "images": images,
@@ -250,26 +251,26 @@ if "--no-install" in sys.argv:
     print("Skipping installation")
     exit(0)
 
-continue_setup = confirm(message="Do you want to download Jellyfin-RPC?", default=True)
+continue_setup = confirm(message="Do you want to download Kodi-RPC?", default=True)
 if not continue_setup:
     print("Exiting...")
     exit(0)
 
-print("\nDownloading Jellyfin-RPC")
+print("\nDownloading Kodi-RPC")
 
 if platform.system() == "Windows":
     subprocess.run(
         [
             "curl",
             "-o",
-            path + "jellyfin-rpc.exe",
+            path + "kodi-rpc.exe",
             "-L",
-            "https://github.com/Radiicall/jellyfin-rpc/releases/latest/download/jellyfin-rpc.exe",
+            "https://github.com/nattadasu/kodi-rpc/releases/latest/download/kodi-rpc.exe",
         ]
     )
 
     autostart = confirm(
-        message="Do you want to autostart Jellyfin-RPC at login?", default=False
+        message="Do you want to autostart Kodi-RPC at login?", default=False
     )
     if autostart:
         if os.path.isfile(path + "winsw.exe"):
@@ -290,10 +291,10 @@ if platform.system() == "Windows":
         )
 
         content = f"""<service>
-    <id>jellyfin-rpc</id>
-    <name>Jellyfin-RPC</name>
-    <description>This service is running Jellyfin-RPC for rich presence support</description>
-    <executable>{path}jellyfin-rpc.exe</executable>
+    <id>kodi-rpc</id>
+    <name>Kodi-RPC</name>
+    <description>This service is running Kodi-RPC for rich presence support</description>
+    <executable>{path}kodi-rpc.exe</executable>
     <arguments>-c {path}main.json -i {path}urls.json</arguments>
 </service>"""
 
@@ -311,48 +312,48 @@ if platform.system() == "Windows":
         subprocess.run([path + "winsw.exe", "start"])
 
         print(
-            "Autostart has been set up, jellyfin-rpc should now launch at login\nas long as there are no issues with the configuration"
+            "Autostart has been set up, kodi-rpc should now launch at login\nas long as there are no issues with the configuration"
         )
 
 
 elif platform.system() == "Darwin":
-    file = f"https://github.com/Radiicall/jellyfin-rpc/releases/latest/download/jellyfin-rpc-{platform.machine()}-darwin"
-    subprocess.run(["curl", "-o", "/usr/local/bin/jellyfin-rpc", "-L", file])
-    subprocess.run(["chmod", "+x", "/usr/local/bin/jellyfin-rpc"])
+    file = f"https://github.com/nattadasu/kodi-rpc/releases/latest/download/kodi-rpc-{platform.machine()}-darwin"
+    subprocess.run(["curl", "-o", "/usr/local/bin/kodi-rpc", "-L", file])
+    subprocess.run(["chmod", "+x", "/usr/local/bin/kodi-rpc"])
 
     autostart = confirm(
-        message="Do you want to autostart Jellyfin-RPC at login?", default=False
+        message="Do you want to autostart Kodi-RPC at login?", default=False
     )
     if autostart:
-        if subprocess.run(["pgrep", "-xq", "--", "'jellyfin-rpc'"]).returncode == 0:
-            subprocess.run(["killall", "jellyfin-rpc"])
+        if subprocess.run(["pgrep", "-xq", "--", "'kodi-rpc'"]).returncode == 0:
+            subprocess.run(["killall", "kodi-rpc"])
 
         if (
-            "Jellyfin-RPC"
+            "Kodi-RPC"
             in subprocess.Popen("launchctl list", shell=True, stdout=subprocess.PIPE)
             .stdout.read()
             .decode()
         ):
-            subprocess.run(["launchctl", "remove", "Jellyfin-RPC"])
+            subprocess.run(["launchctl", "remove", "Kodi-RPC"])
 
         content = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
     <dict>
         <key>Label</key>
-        <string>Jellyfin-RPC</string>
+        <string>Kodi-RPC</string>
         <key>Program</key>
-        <string>/usr/local/bin/jellyfin-rpc</string>
+        <string>/usr/local/bin/kodi-rpc</string>
         <key>RunAtLoad</key>
         <true/>
         <key>StandardErrorPath</key>
-        <string>/tmp/jellyfinrpc.local.stderr.txt</string>
+        <string>/tmp/kodirpc.local.stderr.txt</string>
         <key>StandardOutPath</key>
-        <string>/tmp/jellyfinrpc.local.stdout.txt</string>
+        <string>/tmp/kodirpc.local.stdout.txt</string>
     </dict>
 </plist>"""
 
-        path = os.environ["HOME"] + "/Library/LaunchAgents/jellyfinrpc.local.plist"
+        path = os.environ["HOME"] + "/Library/LaunchAgents/kodirpc.local.plist"
 
         file = open(path, "w")
         file.write(content)
@@ -361,20 +362,20 @@ elif platform.system() == "Darwin":
         subprocess.run(["chmod", "644", path])
         subprocess.run(["launchctl", "load", path])
 
-        print("Jellyfin RPC is now set up to start at login.")
+        print("Kodi RPC is now set up to start at login.")
         print(
-            "If needed, you can run Jellyfin RPC at any time by running 'jellyfin-rpc' in a terminal."
+            "If needed, you can run Kodi RPC at any time by running 'kodi-rpc' in a terminal."
         )
 
 else:
     # If ARM64
     if "aarch64" in platform.machine().lower() or "armv8" in platform.machine().lower():
-        linux_binary = "jellyfin-rpc-arm64-linux"
+        linux_binary = "kodi-rpc-arm64-linux"
     # Else If ARM32
     elif "aarch" in platform.machine().lower() or "arm" in platform.machine().lower():
-        linux_binary = "jellyfin-rpc-arm32-linux"
+        linux_binary = "kodi-rpc-arm32-linux"
     else:
-        linux_binary = "jellyfin-rpc-x86_64-linux"
+        linux_binary = "kodi-rpc-x86_64-linux"
 
     subprocess.run(
         ["mkdir", "-p", os.environ["HOME"].removesuffix("/") + "/.local/bin"]
@@ -383,46 +384,46 @@ else:
         [
             "curl",
             "-o",
-            os.environ["HOME"].removesuffix("/") + "/.local/bin/jellyfin-rpc",
+            os.environ["HOME"].removesuffix("/") + "/.local/bin/kodi-rpc",
             "-L",
-            f"https://github.com/Radiicall/jellyfin-rpc/releases/latest/download/{linux_binary}",
+            f"https://github.com/nattadasu/kodi-rpc/releases/latest/download/{linux_binary}",
         ]
     )
     subprocess.run(
         [
             "chmod",
             "+x",
-            os.environ["HOME"].removesuffix("/") + "/.local/bin/jellyfin-rpc",
+            os.environ["HOME"].removesuffix("/") + "/.local/bin/kodi-rpc",
         ]
     )
 
     if os.environ.get("XDG_CONFIG_HOME"):
         path = (
             os.environ["XDG_CONFIG_HOME"].removesuffix("/")
-            + "/systemd/user/jellyfin-rpc.service"
+            + "/systemd/user/kodi-rpc.service"
         )
     else:
         path = (
             os.environ["HOME"].removesuffix("/")
-            + "/.config/systemd/user/jellyfin-rpc.service"
+            + "/.config/systemd/user/kodi-rpc.service"
         )
 
     autostart = confirm(
-        message="Do you want to autostart Jellyfin-RPC at login using systemd?", default=False
+        message="Do you want to autostart Kodi-RPC at login using systemd?", default=False
     )
     if autostart:
         print(f"\nSetting up service file in {path}")
 
-        subprocess.run(["mkdir", "-p", path.removesuffix("jellyfin-rpc.service")])
+        subprocess.run(["mkdir", "-p", path.removesuffix("kodi-rpc.service")])
 
         content = f"""[Unit]
-Description=Jellyfin-RPC Service
-Documentation=https://github.com/Radiicall/jellyfin-rpc
+Description=Kodi-RPC Service
+Documentation=https://github.com/nattadasu/kodi-rpc
 After=network.target
 
 [Service]
 Type=simple
-ExecStart={os.environ["HOME"].removesuffix("/") + "/.local/bin/jellyfin-rpc"}
+ExecStart={os.environ["HOME"].removesuffix("/") + "/.local/bin/kodi-rpc"}
 Restart=on-failure
 
 [Install]
@@ -434,9 +435,9 @@ WantedBy=default.target"""
 
         subprocess.run(["systemctl", "--user", "daemon-reload"])
         subprocess.run(
-            ["systemctl", "--user", "enable", "--now", "jellyfin-rpc.service"]
+            ["systemctl", "--user", "enable", "--now", "kodi-rpc.service"]
         )
 
-        print("Jellyfin-RPC is now set up to start at login.")
+        print("Kodi-RPC is now set up to start at login.")
 
 print("Installation complete!")

@@ -1,11 +1,11 @@
 [package]
-name        = "jellyfin-rpc"
-version     = "1.3.5"
+name        = "kodi-rpc"
+version     = "0.1.0"
 edition     = "2021"
-description = "Backend for the Jellyfin-RPC-cli and Jellyfin-RPC-Iced projects"
+description = "Backend for the Kodi-RPC-cli project (Discord Rich Presence for Kodi)"
 license     = "GPL-3.0-or-later"
-repository  = "https://github.com/Radiicall/jellyfin-rpc"
-keywords     = ["jellyfin", "discord", "rich-presence"]
+repository  = "https://github.com/nattadasu/kodi-rpc"
+keywords    = ["kodi", "discord", "rich-presence"]
 
 [dependencies]
 discord-rich-presence = "1.0"
@@ -14,6 +14,7 @@ log                   = "0.4"
 url                   = "2.5"
 chrono                = "0.4"
 image                 = "0.25"
+urlencoding           = "2.1"
 
 [dependencies.serde]
 features = ["derive"]

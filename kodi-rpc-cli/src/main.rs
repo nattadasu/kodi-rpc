@@ -1,7 +1,7 @@
 use clap::Parser;
 use colored::Colorize;
 use config::{get_config_path, get_urls_path, Config};
-use jellyfin_rpc::{Client, DisplayFormat, EpisodeDisplayOptions, VERSION};
+use kodi_rpc::{Client, DisplayFormat, EpisodeDisplayOptions, InstanceCfg, VERSION};
 use log::{debug, error, info};
 use retry::retry_with_index;
 use simple_logger::SimpleLogger;
@@ -16,9 +16,9 @@ mod updates;
 */
 
 #[derive(Parser)]
-#[command(author = "Radical <Radiicall> <radical@radical.fun>")]
+#[command(author = "kodi-rpc contributors")]
 #[command(version)]
-#[command(about = "Rich presence for Jellyfin", long_about = None)]
+#[command(about = "Rich presence for Kodi", long_about = None)]
 struct Args {
     #[arg(short = 'c', long = "config", help = "Path to the config file")]
     config: Option<String>,
@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init()
         .unwrap();
 
-    info!("Initializing Jellyfin-RPC");
+    info!("Initializing Kodi-RPC");
 
     #[cfg(feature = "updates")]
     updates::checker();
@@ -78,24 +78,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             error!("{}", error);
             error!(
-                "Please create a proper config file: {}",
-                "https://github.com/JustRadical/jellyfin-rpc/wiki/Setup".green()
+                "Please create a proper config file, see {}",
+                "example.json".green()
             );
             std::process::exit(1)
         }
     };
 
-    debug!("Creating jellyfin-rpc client builder");
+    debug!("Creating kodi-rpc client builder");
     let mut builder = Client::builder();
 
+    let instances: Vec<InstanceCfg> = conf
+        .kodi
+        .instances
+        .into_iter()
+        .map(|i| InstanceCfg {
+            url: i.url,
+            username: i.username,
+            password: i.password,
+            self_signed_cert: i.self_signed_cert,
+            name: i.name,
+        })
+        .collect();
+    debug!("Watching {} Kodi instance(s)", instances.len());
+    builder.instances(instances);
+
     builder
-        .api_key(conf.jellyfin.api_key)
-        .url(conf.jellyfin.url)
-        .usernames(conf.jellyfin.username)
-        .self_signed(conf.jellyfin.self_signed_cert)
-        .episode_simple(conf.jellyfin.show_simple)
-        .episode_divider(conf.jellyfin.add_divider)
-        .episode_prefix(conf.jellyfin.append_prefix)
+        .episode_simple(conf.kodi.show_simple)
+        .episode_divider(conf.kodi.add_divider)
+        .episode_prefix(conf.kodi.append_prefix)
         .show_paused(conf.discord.show_paused)
         .show_images(conf.images.enable_images)
         .use_imgur(conf.images.imgur_images)
@@ -105,70 +116,87 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .image_background(conf.images.bg)
         .image_background_blur(conf.images.bg_blur)
         .image_corner_radius(conf.images.corner_radius)
-        .large_image_text(format!("Jellyfin-RPC v{}", VERSION.unwrap_or("UNKNOWN")))
+        .large_image_text(format!("Kodi-RPC v{}", VERSION.unwrap_or("UNKNOWN")))
         .imgur_urls_file_location(args.image_urls.clone().unwrap_or(get_urls_path()?))
         .litterbox_urls_file_location(args.image_urls.unwrap_or(get_urls_path()?));
 
-    if let Some(display) = conf.jellyfin.music.display {
-        debug!("Found config.jellyfin.music.display");
+    if let Some(display) = conf.kodi.music.display {
+        debug!("Found config.kodi.music.display");
         builder.music_display(display);
     }
 
-    if let Some(separator) = conf.jellyfin.music.separator {
-        debug!("Found config.jellyfin.music.separator");
+    if let Some(separator) = conf.kodi.music.separator {
+        debug!("Found config.kodi.music.separator");
         builder.music_separator(separator);
     }
 
-    if let Some(status_display_type) = conf.jellyfin.music.status_display_type {
-        debug!("Found config.jellyfin.music.status_display_type");
+    if let Some(status_display_type) = conf.kodi.music.status_display_type {
+        debug!("Found config.kodi.music.status_display_type");
         builder.music_status_display_type(status_display_type);
     }
 
-    if let Some(display) = conf.jellyfin.movies.display {
-        debug!("Found config.jellyfin.movies.display");
+    if let Some(display) = conf.kodi.movies.display {
+        debug!("Found config.kodi.movies.display");
         builder.movies_display(display);
     }
 
-    if let Some(separator) = conf.jellyfin.movies.separator {
-        debug!("Found config.jellyfin.movies.separator");
+    if let Some(separator) = conf.kodi.movies.separator {
+        debug!("Found config.kodi.movies.separator");
         builder.movies_separator(separator);
     }
 
-    if let Some(status_display_type) = conf.jellyfin.movies.status_display_type {
-        debug!("Found config.jellyfin.movies.status_display_type");
+    if let Some(status_display_type) = conf.kodi.movies.status_display_type {
+        debug!("Found config.kodi.movies.status_display_type");
         builder.movies_status_display_type(status_display_type);
     }
 
-    if let Some(display) = conf.jellyfin.episodes.display {
-        debug!("Found config.jellyfin.episodes.display");
+    if let Some(display) = conf.kodi.episodes.display {
+        debug!("Found config.kodi.episodes.display");
         builder.episodes_display(display);
     } else {
-        debug!("Couldn't find config.jellyfin.episodes.display, using legacy episode values");
+        debug!("Couldn't find config.kodi.episodes.display, using legacy episode values");
         builder.episodes_display(DisplayFormat::from(EpisodeDisplayOptions {
-            divider: conf.jellyfin.add_divider,
-            prefix: conf.jellyfin.append_prefix,
-            simple: conf.jellyfin.show_simple,
+            divider: conf.kodi.add_divider,
+            prefix: conf.kodi.append_prefix,
+            simple: conf.kodi.show_simple,
         }));
     }
 
-    if let Some(separator) = conf.jellyfin.episodes.separator {
-        debug!("Found config.jellyfin.episodes.separator");
+    if let Some(separator) = conf.kodi.episodes.separator {
+        debug!("Found config.kodi.episodes.separator");
         builder.episodes_separator(separator);
     }
 
-    if let Some(status_display_type) = conf.jellyfin.episodes.status_display_type {
-        debug!("Found config.jellyfin.episodes.status_display_type");
+    if let Some(status_display_type) = conf.kodi.episodes.status_display_type {
+        debug!("Found config.kodi.episodes.status_display_type");
         builder.episodes_status_display_type(status_display_type);
     }
 
-    if let Some(media_types) = conf.jellyfin.blacklist.media_types {
-        debug!("Found config.jellyfin.blacklist.media_types");
+    builder.episodes_poster_source(conf.kodi.episodes.poster_source);
+
+    if let Some(display) = conf.kodi.unknown.display {
+        debug!("Found config.kodi.unknown.display");
+        builder.unknown_display(display);
+    }
+
+    if let Some(separator) = conf.kodi.unknown.separator {
+        debug!("Found config.kodi.unknown.separator");
+        builder.unknown_separator(separator);
+    }
+
+    if let Some(status_display_type) = conf.kodi.unknown.status_display_type {
+        debug!("Found config.kodi.unknown.status_display_type");
+        builder.unknown_status_display_type(status_display_type);
+    }
+
+    if let Some(media_types) = conf.kodi.blacklist.media_types {
+        debug!("Found config.kodi.blacklist.media_types");
         debug!("Blacklisted MediaTypes: {:?}", media_types);
         builder.blacklist_media_types(media_types);
     }
 
-    if let Some(libraries) = conf.jellyfin.blacklist.libraries {
-        debug!("Found config.jellyfin.blacklist.libraries");
+    if let Some(libraries) = conf.kodi.blacklist.libraries {
+        debug!("Found config.kodi.blacklist.libraries");
         debug!("Blacklisted libraries: {:?}", libraries);
         builder.blacklist_libraries(libraries);
     }
@@ -227,8 +255,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(err) => {
                 // TODO: There has to be a better way to check this..
-                if err.to_string() == "content is blacklisted" {
+                if err.to_string() == "content is blacklisted"
+                    || err.to_string() == "nothing is playing"
+                {
                     debug!("{}", err);
+                    if !currently_playing.is_empty() {
+                        let _ = client.clear_activity();
+                        info!("Cleared activity");
+                        currently_playing = String::new();
+                    }
                     continue;
                 }
 

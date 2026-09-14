@@ -7,7 +7,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::{Client, JfResult};
+use crate::{Client, KodiResult};
 
 #[derive(Deserialize, Serialize)]
 struct ImageUrl {
@@ -34,21 +34,38 @@ struct Data {
     link: String,
 }
 
-pub fn get_image(client: &Client) -> JfResult<Url> {
+pub fn get_image(client: &Client) -> KodiResult<Url> {
+    // Cache key includes the resolved art source: if the artwork behind an
+    // item changes (e.g. episode still -> season poster), the stale upload
+    // of the old art must not be served.
+    let art_src = client
+        .artwork_download_url()
+        .map(|u| u.to_string())
+        .unwrap_or_default();
+    let key = format!("{}::{}", client.session.as_ref().unwrap().item_id, art_src);
+
     let mut image_urls = read_file(client)?;
 
-    if let Some(image_url) = image_urls
-        .iter()
-        .find(|image_url| client.session.as_ref().unwrap().item_id == image_url.id)
-    {
-        Ok(Url::parse(&image_url.url)?)
+    if let Some(pos) = image_urls.iter().position(|image_url| key == image_url.id) {
+        // Sanity: a corrupt entry evicts and re-uploads instead of erroring
+        // every poll (imgur links themselves don't expire).
+        match Url::parse(&image_urls[pos].url) {
+            Ok(url) => Ok(url),
+            Err(_) => {
+                image_urls.swap_remove(pos);
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(&client.imgur_options.urls_location)?;
+                file.write_all(serde_json::to_string(&image_urls)?.as_bytes())?;
+                let _ = file.flush();
+                self::get_image(client)
+            }
+        }
     } else {
         let imgur_url = upload(client)?;
 
-        let image_url = ImageUrl::new(
-            &client.session.as_ref().unwrap().item_id,
-            imgur_url.as_str(),
-        );
+        let image_url = ImageUrl::new(&key, imgur_url.as_str());
 
         image_urls.push(image_url);
 
@@ -65,7 +82,7 @@ pub fn get_image(client: &Client) -> JfResult<Url> {
     }
 }
 
-fn read_file(client: &Client) -> JfResult<Vec<ImageUrl>> {
+fn read_file(client: &Client) -> KodiResult<Vec<ImageUrl>> {
     if let Ok(contents_raw) = fs::read_to_string(&client.imgur_options.urls_location) {
         if let Ok(contents) = serde_json::from_str::<Vec<ImageUrl>>(&contents_raw) {
             return Ok(contents);
@@ -92,8 +109,10 @@ fn read_file(client: &Client) -> JfResult<Vec<ImageUrl>> {
     Ok(new)
 }
 
-fn upload(client: &Client) -> JfResult<Url> {
-    let image_bytes = client.reqwest.get(client.get_image()?).send()?.bytes()?;
+fn upload(client: &Client) -> KodiResult<Url> {
+    // Download through the owning instance (works for localhost + image://);
+    // the uploaded imgur URL is what Discord actually sees.
+    let image_bytes = client.download_artwork()?;
 
     let imgur_client = reqwest::blocking::Client::builder().build()?;
 

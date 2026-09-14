@@ -1,8 +1,10 @@
 {
-    "jellyfin": {
-        "url": "https://example.com",
-        "api_key": "sadasodsapasdskd",
-        "username": "your_username_here",
+    "kodi": {
+        "url": "http://localhost:8080",
+        "username": "kodi",
+        "password": "kodi",
+        "_comment_instances": "multi-instance: add an 'instances' array of {url, username, password, self_signed_cert, name}; every instance is polled and whichever plays first owns the presence until it stops. When non-empty, the top-level url/username/password above are ignored.",
+        "instances": [],
         "music": {
             "display": ["genres"],
             "separator": "-"
@@ -11,14 +13,32 @@
             "display": ["genres"],
             "separator": "-"
         },
+        "episodes": {
+            "display": {
+                "details_text": "{show-title}",
+                "state_text": "S{season-padded}E{episode-padded} {title}",
+                "image_text": "Kodi-RPC v{version}"
+            },
+            "separator": "-",
+            "poster_source": "season"
+        },
+        "_comment_poster_source": "episodes poster_source: season (season poster, then series), series (series poster only), or episode (episode still, no poster lookups).",
+        "unknown": {
+            "display": {
+                "details_text": "{title}",
+                "state_text": "via {addon} {sep} {file-host}",
+                "image_text": "Kodi-RPC v{version}"
+            },
+            "separator": "-"
+        },
         "self_signed_cert": false,
         "show_simple": false,
         "append_prefix": false,
         "add_divider": false,
-        "_comment": "the 4 lines below and this line arent needed and should be removed, by default nothing will display if these are present",
+        "_comment": "blacklist libraries matches against Kodi file paths (substrings). Media types: music, movie, episode, livetv, unknown, musicvideo, channel, picture",
         "blacklist": {
-            "media_types": ["music", "movie", "episode", "livetv"],
-            "libraries": ["Anime", "Anime Movies"]
+            "media_types": [],
+            "libraries": []
         }
     },
     "discord": {
@@ -36,11 +56,11 @@
         "show_paused": true
     },
     "imgur": {
-        "client_id": "asdjdjdg394209fdjs093"
+        "client_id": ""
     },
     "images": {
         "enable_images": true,
-        "imgur_images": true,
+        "imgur_images": false,
         "litterbox_images": false,
         "process_images": true,
         "size": 512,

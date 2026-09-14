@@ -1,20 +1,22 @@
 use std::{
-    fs::{self, File, OpenOptions}, io::{Error, ErrorKind, Write}, path::Path
+    fs::{self, File, OpenOptions},
+    io::{Error, ErrorKind, Write},
+    path::Path,
 };
 
-use log::{debug};
+use chrono::prelude::*;
+use log::debug;
 use serde::{Deserialize, Serialize};
 use url::Url;
-use chrono::prelude::*;
 
-use reqwest::{blocking::multipart::{ Form, Part }};
-use crate::{ Client, JfResult };
+use crate::{Client, KodiResult};
+use reqwest::blocking::multipart::{Form, Part};
 
 #[derive(Deserialize, Serialize, Clone)]
 struct ImageUrl {
     id: String,
     url: String,
-    timestamp: String
+    timestamp: String,
 }
 
 impl ImageUrl {
@@ -22,35 +24,42 @@ impl ImageUrl {
         Self {
             id: id.into(),
             url: url.into(),
-            timestamp: timestamp.into()
+            timestamp: timestamp.into(),
         }
     }
 }
 
-pub fn get_image(client: &Client) -> JfResult<Url> {
+pub fn get_image(client: &Client) -> KodiResult<Url> {
+    // Cache key includes the resolved art source: if the artwork behind an
+    // item changes (e.g. episode still -> season poster), the stale upload
+    // of the old art must not be served.
+    let art_src = client
+        .artwork_download_url()
+        .map(|u| u.to_string())
+        .unwrap_or_default();
+    let key = format!("{}::{}", client.session.as_ref().unwrap().item_id, art_src);
+
     let mut image_urls = read_file(client)?;
 
-    if let Some(idx) = image_urls
-        .iter()
-        .position(|image_url| client.session.as_ref().unwrap().item_id == image_url.id)
-    {
+    if let Some(idx) = image_urls.iter().position(|image_url| key == image_url.id) {
         let image_url = image_urls[idx].clone();
 
-        debug!("Found image url: \"{}\"", image_url.url.clone());
+        // Sanity + expiry: litterbox links die server-side after 72h, and a
+        // corrupt cache entry must evict (not panic the loop or serve garbage).
+        let usable = Url::parse(&image_url.url).is_ok()
+            && image_url
+                .timestamp
+                .parse::<i64>()
+                .ok()
+                .and_then(|t| DateTime::from_timestamp(t, 0))
+                .map(|date| (Utc::now() - date).num_hours() < 72)
+                .unwrap_or(false);
 
-        let file_timestamp = image_url.timestamp.parse::<i64>().unwrap();
-        let file_date = DateTime::from_timestamp(file_timestamp, 0).unwrap();
-        let now = Utc::now();
-
-        let diff = now - file_date;
-
-        debug!("Image is {} hours old.", diff.num_hours().to_string());
-
-        if diff.num_hours() >= 72 {
-            debug!("Image \"{}\" is expired", image_url.url.clone());
+        if !usable {
+            debug!("Cached litterbox image invalid or expired; evicting");
 
             image_urls.swap_remove(idx);
-            
+
             let mut file = OpenOptions::new()
                 .write(true)
                 .truncate(true)
@@ -59,11 +68,10 @@ pub fn get_image(client: &Client) -> JfResult<Url> {
             file.write_all(serde_json::to_string(&image_urls)?.as_bytes())?;
 
             let _ = file.flush();
-
             // Try again
             self::get_image(client)
-        }
-        else {
+        } else {
+            debug!("Found image url: \"{}\"", image_url.url);
             Ok(Url::parse(&image_url.url)?)
         }
     } else {
@@ -76,9 +84,9 @@ pub fn get_image(client: &Client) -> JfResult<Url> {
         debug!("Litterbox response: {}", litterbox_url);
 
         let image_url = ImageUrl::new(
-            &client.session.as_ref().unwrap().item_id,
+            &key,
             litterbox_url.as_str(),
-            current_time.timestamp().to_string()
+            current_time.timestamp().to_string(),
         );
 
         image_urls.push(image_url);
@@ -96,7 +104,7 @@ pub fn get_image(client: &Client) -> JfResult<Url> {
     }
 }
 
-fn read_file(client: &Client) -> JfResult<Vec<ImageUrl>> {
+fn read_file(client: &Client) -> KodiResult<Vec<ImageUrl>> {
     if let Ok(contents_raw) = fs::read_to_string(&client.litterbox_options.urls_location) {
         if let Ok(contents) = serde_json::from_str::<Vec<ImageUrl>>(&contents_raw) {
             return Ok(contents);
@@ -123,8 +131,10 @@ fn read_file(client: &Client) -> JfResult<Vec<ImageUrl>> {
     Ok(new)
 }
 
-fn upload(client: &Client) -> JfResult<Url> {
-    let image_bytes = client.reqwest.get(client.get_image()?).send()?.bytes()?;
+fn upload(client: &Client) -> KodiResult<Url> {
+    // Download through the owning instance (works for localhost + image://);
+    // the uploaded litterbox URL is what Discord actually sees.
+    let image_bytes = client.download_artwork()?;
 
     debug!("Uploading image to litterbox");
 
@@ -141,7 +151,10 @@ fn upload(client: &Client) -> JfResult<Url> {
     let litterbox_form = Form::new()
         .text("reqtype", "fileupload")
         .text("time", "72h")
-        .part("fileToUpload", Part::bytes(file_bytes).file_name(filename + ".jpg"));
+        .part(
+            "fileToUpload",
+            Part::bytes(file_bytes).file_name(filename + ".jpg"),
+        );
 
     let res: String = litterbox_client
         .post("https://litterbox.catbox.moe/resources/internals/api.php")

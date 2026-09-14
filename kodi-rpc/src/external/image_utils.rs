@@ -1,5 +1,5 @@
-use image::{DynamicImage, GenericImageView, ImageFormat, imageops};
-use std::io::{Cursor};
+use image::{imageops, DynamicImage, GenericImageView, ImageFormat};
+use std::io::Cursor;
 
 #[derive(Debug, Clone)]
 pub struct ImageProcessingOptions {
@@ -20,7 +20,10 @@ impl Default for ImageProcessingOptions {
     }
 }
 
-pub fn make_square_with_blur(input_bytes: &[u8], options: &ImageProcessingOptions) -> Result<Vec<u8>, image::ImageError> {
+pub fn make_square_with_blur(
+    input_bytes: &[u8],
+    options: &ImageProcessingOptions,
+) -> Result<Vec<u8>, image::ImageError> {
     let img = image::load_from_memory(input_bytes)?;
     let (width, height) = img.dimensions();
     let size = options.size.unwrap_or_else(|| width.max(height));
@@ -45,10 +48,15 @@ pub fn make_square_with_blur(input_bytes: &[u8], options: &ImageProcessingOption
             bg_dyn = DynamicImage::ImageRgba8(imageops::blur(&bg_dyn, blur_radius));
         }
         imageops::overlay(&mut canvas, &bg_dyn, 0, 0);
-        imageops::overlay(&mut canvas, &fg_dyn, ((size - fg_w) / 2) as i64, ((size - fg_h) / 2) as i64);
+        imageops::overlay(
+            &mut canvas,
+            &fg_dyn,
+            ((size - fg_w) / 2) as i64,
+            ((size - fg_h) / 2) as i64,
+        );
     } else {
         let mut fg_rounded = fg_dyn;
-        
+
         if let Some(radius_percent) = options.corner_radius {
             let radius = ((size as f32) * (radius_percent / 100.0)) as u32;
             if radius > 0 {
@@ -56,7 +64,12 @@ pub fn make_square_with_blur(input_bytes: &[u8], options: &ImageProcessingOption
             }
         }
 
-        imageops::overlay(&mut canvas, &fg_rounded, ((size - fg_w) / 2) as i64, ((size - fg_h) / 2) as i64);
+        imageops::overlay(
+            &mut canvas,
+            &fg_rounded,
+            ((size - fg_w) / 2) as i64,
+            ((size - fg_h) / 2) as i64,
+        );
     }
 
     let mut buf = Vec::new();
@@ -87,7 +100,7 @@ fn apply_rounded_corners(img: &mut DynamicImage, radius: u32) {
                 let dx = x as f32 - cx as f32;
                 let dy = y as f32 - cy as f32;
                 let distance = (dx * dx + dy * dy).sqrt();
-                
+
                 if distance > radius_f {
                     let pixel = rgba.get_pixel_mut(x, y);
                     pixel[3] = 0;

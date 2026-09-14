@@ -8,7 +8,7 @@ pub fn checker() {
     if latest != current {
         warn!(
             "{} (Current: v{}, Latest: v{})",
-            "You are not running the latest version of Jellyfin-RPC"
+            "You are not running the latest version of Kodi-RPC"
                 .red()
                 .bold(),
             current,
@@ -17,7 +17,7 @@ pub fn checker() {
         warn!("{}", "A newer version can be found at".red().bold());
         warn!(
             "{}",
-            "https://github.com/JustRadical/jellyfin-rpc/releases/latest"
+            "https://github.com/nattadasu/kodi-rpc/releases/latest"
                 .green()
                 .bold()
         );
@@ -29,10 +29,14 @@ pub fn checker() {
 }
 
 fn get_latest_github() -> Result<String, reqwest::Error> {
-    let url = reqwest::blocking::get("https://github.com/JustRadical/jellyfin-rpc/releases/latest")?
-        .url()
-        .as_str()
-        .trim_start_matches("https://github.com/JustRadical/jellyfin-rpc/releases/tag/")
-        .to_string();
-    Ok(url)
+    let final_url =
+        reqwest::blocking::get("https://github.com/nattadasu/kodi-rpc/releases/latest")?
+            .url()
+            .to_string();
+    // With no releases published yet, GitHub redirects /releases/latest to
+    // /releases (no tag) — stay quiet instead of warning with a garbage version.
+    match final_url.split_once("/releases/tag/") {
+        Some((_, tag)) if !tag.is_empty() => Ok(tag.to_string()),
+        _ => Ok(VERSION.unwrap_or("0.0.0").to_string()),
+    }
 }

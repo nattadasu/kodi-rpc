@@ -1,10 +1,11 @@
 /target
-/jellyfin-rpc/target
-/jellyfin-rpc/Cargo.lock
-/jellyfin-rpc-cli/target
+/kodi-rpc/target
+/kodi-rpc-cli/target
 /main.json
 /pkg
 /.DS_Store
 /.vscode
-/jftest
+/ktest
 /shell.nix
+urls.json
+/.task

@@ -1,4 +1,4 @@
-use jellyfin_rpc::{Button, DisplayFormat, MediaType, StatusType};
+use kodi_rpc::{Button, DisplayFormat, MediaType, PosterSource, StatusType};
 use log::debug;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -7,10 +7,8 @@ use std::env;
 ///
 /// The config file is parsed into this struct.
 pub struct Config {
-    /// Jellyfin configuration.
-    ///
-    /// Has every required part of the config, hence why its not an `Option<Jellyfin>`.
-    pub jellyfin: Jellyfin,
+    /// Kodi configuration.
+    pub kodi: Kodi,
     /// Discord configuration.
     pub discord: Discord,
     /// Imgur configuration.
@@ -20,29 +18,34 @@ pub struct Config {
 }
 
 /// This struct contains every "required" part of the config.
-pub struct Jellyfin {
-    /// URL to the jellyfin server.
-    pub url: String,
-    /// Api key from the jellyfin server, used to gather what's being watched.
-    pub api_key: String,
-    /// Username of the person that info should be gathered from.
-    pub username: Vec<String>,
+pub struct Kodi {
+    /// Watched servers. Single dict-style configs resolve to exactly one entry.
+    pub instances: Vec<KodiInstance>,
     /// Contains configuration for Music display.
     pub music: DisplayOptions,
     /// Contains configuration for Movie display.
     pub movies: DisplayOptions,
     /// Contains configuration for Episode display.
     pub episodes: DisplayOptions,
+    /// Contains configuration for Unknown / 3rd-party plugin display.
+    pub unknown: DisplayOptions,
     /// Blacklist configuration.
     pub blacklist: Blacklist,
-    /// Self signed certificate option
-    pub self_signed_cert: bool,
     /// Simple episode name
     pub show_simple: bool,
     /// Add "0" before season/episode number if lower than 10.
     pub append_prefix: bool,
     /// Add a divider between numbers
     pub add_divider: bool,
+}
+
+/// One watched Kodi server.
+pub struct KodiInstance {
+    pub name: String,
+    pub url: String,
+    pub username: String,
+    pub password: String,
+    pub self_signed_cert: bool,
 }
 
 /// Contains configuration for Music/Movie display.
@@ -53,6 +56,8 @@ pub struct DisplayOptions {
     pub separator: Option<String>,
     /// Whether the to display the name, state, or details in the status title.
     pub status_display_type: Option<StatusType>,
+    /// Episode artwork: season poster, series poster, or episode still.
+    pub poster_source: PosterSource,
 }
 
 /// Discord configuration
@@ -97,20 +102,24 @@ impl Config {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub struct ConfigBuilder {
-    pub jellyfin: JellyfinBuilder,
+    pub kodi: KodiBuilder,
     pub discord: Option<DiscordBuilder>,
     pub imgur: Option<Imgur>,
     pub images: Option<ImagesBuilder>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct JellyfinBuilder {
+pub struct KodiBuilder {
+    #[serde(default)]
     pub url: String,
-    pub api_key: String,
-    pub username: Username,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    /// Extra servers. When non-empty, the top-level url/credentials are ignored.
+    pub instances: Option<Vec<KodiInstanceBuilder>>,
     pub music: Option<DisplayOptionsBuilder>,
     pub movies: Option<DisplayOptionsBuilder>,
     pub episodes: Option<DisplayOptionsBuilder>,
+    pub unknown: Option<DisplayOptionsBuilder>,
     pub blacklist: Option<Blacklist>,
     pub self_signed_cert: Option<bool>,
     pub show_simple: Option<bool>,
@@ -119,12 +128,12 @@ pub struct JellyfinBuilder {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(untagged)]
-pub enum Username {
-    /// If the username is a `Vec<String>`.
-    Vec(Vec<String>),
-    /// If the username is a `String`.
-    String(String),
+pub struct KodiInstanceBuilder {
+    pub url: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub self_signed_cert: Option<bool>,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -132,6 +141,7 @@ pub struct DisplayOptionsBuilder {
     pub display: Option<Display>,
     pub separator: Option<String>,
     pub status_display_type: Option<String>,
+    pub poster_source: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -145,12 +155,13 @@ pub enum Display {
     CustomFormat(DisplayFormat),
 }
 
-/// Blacklist MediaTypes and libraries.
+/// Blacklist MediaTypes and libraries (path substrings for Kodi).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Blacklist {
     /// `Vec<String>` of MediaTypes to blacklist
     pub media_types: Option<Vec<MediaType>>,
-    /// `Vec<String>` of libraries to blacklist
+    /// `Vec<String>` of path substrings to blacklist
+    /// (e.g. `"plugin.video.foo"`, `"Kids"`, `"smb://nas/private"`).
     pub libraries: Option<Vec<String>>,
 }
 
@@ -188,11 +199,9 @@ pub struct ImagesBuilder {
 
 /// Find urls.json in filesystem, used to store images that were already previously uploaded to imgur.
 ///
-/// This is to avoid the user having to specify a filepath on launch.
-///
 /// Default urls.json path depends on OS
-/// Windows: `%appdata%\jellyfin-rpc\urls.json`
-/// Linux/macOS: `~/.config/jellyfin-rpc/urls.json`
+/// Windows: `%appdata%\kodi-rpc\urls.json`
+/// Linux/macOS: `~/.config/kodi-rpc/urls.json`
 pub fn get_urls_path() -> Result<String, Box<dyn std::error::Error>> {
     if cfg!(not(windows)) {
         debug!("Platform is not Windows");
@@ -201,21 +210,19 @@ pub fn get_urls_path() -> Result<String, Box<dyn std::error::Error>> {
             Err(_) => env::var("HOME")? + "/.config",
         };
 
-        Ok(xdg_config_home + ("/jellyfin-rpc/urls.json"))
+        Ok(xdg_config_home + ("/kodi-rpc/urls.json"))
     } else {
         debug!("Platform is Windows");
         let app_data = env::var("APPDATA")?;
-        Ok(app_data + r"\jellyfin-rpc\urls.json")
+        Ok(app_data + r"\kodi-rpc\urls.json")
     }
 }
 
 /// Find default config path (main.json) in filesystem.
 ///
-/// This is to avoid the user having to specify a filepath on launch.
-///
 /// Default config path depends on OS
-/// Windows: `%appdata%\jellyfin-rpc\main.json`
-/// Linux/macOS: `~/.config/jellyfin-rpc/main.json`
+/// Windows: `%appdata%\kodi-rpc\main.json`
+/// Linux/macOS: `~/.config/kodi-rpc/main.json`
 pub fn get_config_path() -> Result<String, Box<dyn std::error::Error>> {
     debug!("Getting config path");
     if cfg!(not(windows)) {
@@ -225,24 +232,26 @@ pub fn get_config_path() -> Result<String, Box<dyn std::error::Error>> {
             Err(_) => env::var("HOME")? + "/.config",
         };
 
-        Ok(xdg_config_home + "/jellyfin-rpc/main.json")
+        Ok(xdg_config_home + "/kodi-rpc/main.json")
     } else {
         debug!("Platform is Windows");
         let app_data = env::var("APPDATA")?;
-        Ok(app_data + r"\jellyfin-rpc\main.json")
+        Ok(app_data + r"\kodi-rpc\main.json")
     }
 }
 
 impl ConfigBuilder {
     fn new() -> Self {
         Self {
-            jellyfin: JellyfinBuilder {
+            kodi: KodiBuilder {
                 url: "".to_string(),
-                username: Username::String("".to_string()),
-                api_key: "".to_string(),
+                username: None,
+                password: None,
+                instances: None,
                 music: None,
                 movies: None,
                 episodes: None,
+                unknown: None,
                 blacklist: None,
                 self_signed_cert: None,
                 show_simple: Some(false),
@@ -256,105 +265,73 @@ impl ConfigBuilder {
     }
 
     /// Loads the config from the given path.
+    ///
+    /// Accepts both the new `{"kodi": ...}` shape and the legacy
+    /// `{"jellyfin": ...}` shape from jellyfin-rpc (mapped automatically).
     pub fn load(self, path: &str) -> Result<Self, Box<dyn std::error::Error>> {
         debug!("Config path is: {}", path);
 
         let data = std::fs::read_to_string(path)?;
-        let config = serde_json::from_str(&data)?;
+        // Backwards compat: jellyfin-rpc configs use `jellyfin.url/api_key/username`.
+        // Accept them by rewriting the top-level key before parsing.
+        let mut value: serde_json::Value = serde_json::from_str(&data)?;
+        if value.get("kodi").is_none() {
+            if let Some(jf) = value.get("jellyfin").cloned() {
+                debug!("Found legacy jellyfin config block, mapping to kodi");
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert("kodi".to_string(), jf);
+                }
+            }
+        }
+        let config: ConfigBuilder = serde_json::from_value(value)?;
 
         debug!("Config loaded successfully");
 
         Ok(config)
     }
 
+    fn parse_display_options(
+        input: Option<DisplayOptionsBuilder>,
+    ) -> (
+        Option<DisplayFormat>,
+        Option<String>,
+        Option<StatusType>,
+        PosterSource,
+    ) {
+        if let Some(opts) = input {
+            let display = opts.display.map(|disp| match disp {
+                Display::Vec(display) => DisplayFormat::from(display),
+                Display::String(display) => DisplayFormat::from(display),
+                Display::CustomFormat(display) => display,
+            });
+            let separator = opts.separator;
+            let status = opts
+                .status_display_type
+                .and_then(|x| StatusType::try_from(x).ok());
+            let poster_source = opts
+                .poster_source
+                .map(PosterSource::from)
+                .unwrap_or_default();
+            (display, separator, status, poster_source)
+        } else {
+            (None, None, None, PosterSource::default())
+        }
+    }
+
     pub fn build(self) -> Config {
-        let username = match self.jellyfin.username {
-            Username::Vec(usernames) => usernames,
-            Username::String(username) => username.split(',').map(|u| u.to_string()).collect(),
-        };
-
-        let music_display;
-        let music_separator;
-        let music_status_display_type;
-
-        if let Some(music) = self.jellyfin.music {
-            if let Some(disp) = music.display {
-                music_display = Some(match disp {
-                    Display::Vec(display) => DisplayFormat::from(display),
-                    Display::String(display) => DisplayFormat::from(display),
-                    Display::CustomFormat(display) => display,
-                });
-            } else {
-                music_display = None;
-            }
-
-            music_separator = music.separator;
-
-            music_status_display_type = music
-                .status_display_type
-                .and_then(|x| StatusType::try_from(x).ok());
-        } else {
-            music_display = None;
-            music_separator = None;
-            music_status_display_type = None;
-        }
-
-        let movie_display;
-        let movie_separator;
-        let movie_status_display_type;
-
-        if let Some(movies) = self.jellyfin.movies {
-            if let Some(disp) = movies.display {
-                movie_display = Some(match disp {
-                    Display::Vec(display) => DisplayFormat::from(display),
-                    Display::String(display) => DisplayFormat::from(display),
-                    Display::CustomFormat(display) => display,
-                });
-            } else {
-                movie_display = None;
-            }
-
-            movie_separator = movies.separator;
-
-            movie_status_display_type = movies
-                .status_display_type
-                .and_then(|x| StatusType::try_from(x).ok());
-        } else {
-            movie_display = None;
-            movie_separator = None;
-            movie_status_display_type = None;
-        }
-
-        let episode_display;
-        let episode_separator;
-        let episode_status_display_type;
-
-        if let Some(episodes) = self.jellyfin.episodes {
-            if let Some(disp) = episodes.display {
-                episode_display = Some(match disp {
-                    Display::Vec(display) => DisplayFormat::from(display),
-                    Display::String(display) => DisplayFormat::from(display),
-                    Display::CustomFormat(display) => display,
-                });
-            } else {
-                episode_display = None;
-            }
-
-            episode_separator = episodes.separator;
-
-            episode_status_display_type = episodes
-                .status_display_type
-                .and_then(|x| StatusType::try_from(x).ok());
-        } else {
-            episode_display = None;
-            episode_separator = None;
-            episode_status_display_type = None;
-        }
+        let (music_display, music_separator, music_status_display_type, music_poster) =
+            Self::parse_display_options(self.kodi.music);
+        let (movie_display, movie_separator, movie_status_display_type, movies_poster) =
+            Self::parse_display_options(self.kodi.movies);
+        let (episode_display, episode_separator, episode_status_display_type, episodes_poster) =
+            Self::parse_display_options(self.kodi.episodes);
+        let (unknown_display, unknown_separator, unknown_status_display_type, unknown_poster) =
+            Self::parse_display_options(self.kodi.unknown);
 
         let media_types;
         let libraries;
 
-        if let Some(blacklist) = self.jellyfin.blacklist {
+        if let Some(blacklist) = self.kodi.blacklist {
             media_types = blacklist.media_types;
             libraries = blacklist.libraries;
         } else {
@@ -413,42 +390,61 @@ impl ConfigBuilder {
             image_corner_radius = Some(4.0);
         }
 
-        let url;
-
-        if self.jellyfin.url.ends_with("/") {
-            url = self.jellyfin.url;
-        } else {
-            url = self.jellyfin.url + "/"
-        }
+        let instances: Vec<KodiInstance> = match &self.kodi.instances {
+            Some(list) if list.iter().any(|i| !i.url.is_empty()) => list
+                .iter()
+                .filter(|i| !i.url.is_empty())
+                .map(|i| KodiInstance {
+                    name: i.name.clone().unwrap_or_else(|| i.url.clone()),
+                    url: i.url.clone(),
+                    username: i.username.clone().unwrap_or_default(),
+                    password: i.password.clone().unwrap_or_default(),
+                    self_signed_cert: i.self_signed_cert.unwrap_or(false),
+                })
+                .collect(),
+            _ => vec![KodiInstance {
+                name: self.kodi.url.clone(),
+                url: self.kodi.url.clone(),
+                username: self.kodi.username.clone().unwrap_or_default(),
+                password: self.kodi.password.clone().unwrap_or_default(),
+                self_signed_cert: self.kodi.self_signed_cert.unwrap_or(false),
+            }],
+        };
 
         Config {
-            jellyfin: Jellyfin {
-                url,
-                api_key: self.jellyfin.api_key,
-                username,
+            kodi: Kodi {
+                instances,
                 music: DisplayOptions {
                     display: music_display,
                     separator: music_separator,
                     status_display_type: music_status_display_type,
+                    poster_source: music_poster,
                 },
                 movies: DisplayOptions {
                     display: movie_display,
                     separator: movie_separator,
                     status_display_type: movie_status_display_type,
+                    poster_source: movies_poster,
                 },
                 episodes: DisplayOptions {
                     display: episode_display,
                     separator: episode_separator,
                     status_display_type: episode_status_display_type,
+                    poster_source: episodes_poster,
+                },
+                unknown: DisplayOptions {
+                    display: unknown_display,
+                    separator: unknown_separator,
+                    status_display_type: unknown_status_display_type,
+                    poster_source: unknown_poster,
                 },
                 blacklist: Blacklist {
                     media_types,
                     libraries,
                 },
-                self_signed_cert: self.jellyfin.self_signed_cert.unwrap_or(false),
-                show_simple: self.jellyfin.show_simple.unwrap_or(false),
-                append_prefix: self.jellyfin.append_prefix.unwrap_or(false),
-                add_divider: self.jellyfin.add_divider.unwrap_or(false),
+                show_simple: self.kodi.show_simple.unwrap_or(false),
+                append_prefix: self.kodi.append_prefix.unwrap_or(false),
+                add_divider: self.kodi.add_divider.unwrap_or(false),
             },
             discord: Discord {
                 application_id,

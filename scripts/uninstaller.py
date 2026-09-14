@@ -7,16 +7,16 @@ import shutil
 # Thanks to https://github.com/pogmommy for making the original macOS uninstaller
 # Thanks to https://github.com/xenoncolt for making the original Windows uninstaller
 
-print("Welcome to the Jellyfin-RPC uninstaller")
+print("Welcome to the Kodi-RPC uninstaller")
 input("Hit enter to continue...")
 
 if platform.system() != "Windows":
     if os.environ.get("XDG_CONFIG_HOME"):
-        path = os.environ["XDG_CONFIG_HOME"].removesuffix("/") + "/jellyfin-rpc/"
+        path = os.environ["XDG_CONFIG_HOME"].removesuffix("/") + "/kodi-rpc/"
     else:
-        path = os.environ["HOME"].removesuffix("/") + "/.config/jellyfin-rpc/"
+        path = os.environ["HOME"].removesuffix("/") + "/.config/kodi-rpc/"
 else:
-    path = os.environ["APPDATA"].removesuffix("\\") + "\\jellyfin-rpc\\"
+    path = os.environ["APPDATA"].removesuffix("\\") + "\\kodi-rpc\\"
 
 if platform.system() == "Windows":
     if os.path.isfile(path + "winsw.exe"):
@@ -27,29 +27,29 @@ if platform.system() == "Windows":
 
     shutil.rmtree(path)
 elif platform.system() == "Darwin":
-    if subprocess.run(["pgrep", "-xq", "--", "'jellyfin-rpc'"]).returncode == 0:
-        subprocess.run(["killall", "jellyfin-rpc"])
+    if subprocess.run(["pgrep", "-xq", "--", "'kodi-rpc'"]).returncode == 0:
+        subprocess.run(["killall", "kodi-rpc"])
 
-    if "Jellyfin-RPC" in subprocess.Popen("launchctl list", shell=True, stdout=subprocess.PIPE).stdout.read().decode():
-        subprocess.run(["launchctl", "remove", "Jellyfin-RPC"])
+    if "Kodi-RPC" in subprocess.Popen("launchctl list", shell=True, stdout=subprocess.PIPE).stdout.read().decode():
+        subprocess.run(["launchctl", "remove", "Kodi-RPC"])
 
-    servicepath = os.environ["HOME"].removesuffix("/") + "/Library/LaunchAgents/jellyfinrpc.local.plist"
+    servicepath = os.environ["HOME"].removesuffix("/") + "/Library/LaunchAgents/kodirpc.local.plist"
     if os.path.isfile(servicepath):
         os.remove(servicepath)
     shutil.rmtree(path)
-    os.remove("/usr/local/bin/jellyfin-rpc")
+    os.remove("/usr/local/bin/kodi-rpc")
 else:
-    if "jellyfin-rpc.service" in subprocess.Popen("systemctl --user list-units", shell=True, stdout=subprocess.PIPE).stdout.read().decode():
-        subprocess.run(["systemctl", "--user", "disable", "--now", "jellyfin-rpc.service"])
+    if "kodi-rpc.service" in subprocess.Popen("systemctl --user list-units", shell=True, stdout=subprocess.PIPE).stdout.read().decode():
+        subprocess.run(["systemctl", "--user", "disable", "--now", "kodi-rpc.service"])
 
-    if subprocess.run(["pgrep", "-xq", "--", "'jellyfin-rpc'"]).returncode == 0:
-        subprocess.run(["killall", "jellyfin-rpc"])
+    if subprocess.run(["pgrep", "-xq", "--", "'kodi-rpc'"]).returncode == 0:
+        subprocess.run(["killall", "kodi-rpc"])
 
-    servicepath = path.removesuffix("jellyfin-rpc/") + "systemd/user/jellyfin-rpc.service"
+    servicepath = path.removesuffix("kodi-rpc/") + "systemd/user/kodi-rpc.service"
     if os.path.isfile(servicepath):
         subprocess.run(["rm", servicepath])
     shutil.rmtree(path)
-    os.remove(os.environ["HOME"].removesuffix("/") + "/.local/bin/jellyfin-rpc")
+    os.remove(os.environ["HOME"].removesuffix("/") + "/.local/bin/kodi-rpc")
 
 print("Uninstall complete!")
 sleep(5)

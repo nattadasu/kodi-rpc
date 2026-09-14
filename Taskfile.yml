@@ -1,0 +1,69 @@
+version: '3'
+
+# Standard workflows for kodi-rpc. Needs: cargo, and go-task to run this file.
+# `task build` compiles the single `kodi-rpc` release binary.
+
+vars:
+  BIN: kodi-rpc
+  PKG: kodi-rpc-cli
+
+tasks:
+  default:
+    desc: Release-build the single binary
+    cmds:
+      - task: build
+
+  build:
+    desc: Compile the release binary to target/release/kodi-rpc
+    cmds:
+      - cargo build --release -p {{.PKG}}
+    sources:
+      - Cargo.toml
+      - Cargo.lock
+      - kodi-rpc/**/*.rs
+      - kodi-rpc-cli/**/*.rs
+    generates:
+      - target/release/{{.BIN}}
+
+  dev:
+    desc: Fast debug build for local testing
+    cmds:
+      - cargo build -p {{.PKG}}
+
+  test:
+    desc: Run the full test suite
+    cmds:
+      - cargo test
+
+  lint:
+    desc: Clippy on all targets
+    cmds:
+      - cargo clippy --all-targets
+
+  fmt:
+    desc: Format all code
+    cmds:
+      - cargo fmt --all
+
+  fmt-check:
+    desc: Fail if anything is unformatted (CI)
+    cmds:
+      - cargo fmt --all --check
+
+  run:
+    desc: Run against a config (default ~/.config/kodi-rpc/main.json)
+    cmds:
+      - cargo run -p {{.PKG}} -- -c "{{.CONFIG | default \"~/.config/kodi-rpc/main.json\"}}" -t {{.WAIT | default "7"}}
+
+  install:
+    desc: Release-build and install the binary to ~/.local/bin
+    cmds:
+      - task: build
+      - mkdir -p ~/.local/bin
+      - cp target/release/{{.BIN}} ~/.local/bin/{{.BIN}}
+      - echo "installed to ~/.local/bin/{{.BIN}}"
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - cargo clean

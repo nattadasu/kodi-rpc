@@ -1,0 +1,12 @@
+[Unit]
+Description=Kodi-RPC Service
+Documentation=https://github.com/nattadasu/kodi-rpc
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/path/to/kodi-rpc/executable -c /path/to/kodi-rpc/main.json
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
