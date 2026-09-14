@@ -176,7 +176,7 @@ if not use_existing:
 
     print("----------Discord----------")
 
-    appid = input("Enter your discord application ID [Default: 1053747938519679018]: ")
+    appid = input("Enter your discord application ID [Default: 1549062924545556480]: ")
     if appid == "":
         appid = None
 

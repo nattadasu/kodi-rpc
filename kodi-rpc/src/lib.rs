@@ -1502,7 +1502,7 @@ impl ClientBuilder {
     /// Returns a ClientBuilder with some default options set
     pub fn new() -> Self {
         Self {
-            client_id: "1053747938519679018".to_string(),
+            client_id: "1549062924545556480".to_string(),
             music_separator: "-".to_string(),
             music_display: DisplayFormat::from(vec!["genres".to_string()]),
             movies_separator: "-".to_string(),
