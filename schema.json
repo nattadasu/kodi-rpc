@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/nattadasu/kodi-rpc/main/schema.json",
+  "title": "kodi-rpc configuration",
+  "description": "Config file for kodi-rpc (default ~/.config/kodi-rpc/main.json). Unknown keys such as _comment are ignored.",
+  "type": "object",
+  "properties": {
+    "kodi": { "$ref": "#/$defs/Kodi" },
+    "discord": { "$ref": "#/$defs/Discord" },
+    "imgur": { "$ref": "#/$defs/Imgur" },
+    "images": { "$ref": "#/$defs/Images" }
+  },
+  "required": ["kodi"],
+  "additionalProperties": true,
+  "$defs": {
+    "Kodi": {
+      "type": "object",
+      "properties": {
+        "url": { "type": "string" },
+        "urls": { "type": "array", "items": { "type": "string" } },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "self_signed_cert": { "type": "boolean" },
+        "instances": { "type": "array", "items": { "$ref": "#/$defs/Instance" } },
+        "music": { "$ref": "#/$defs/Display" },
+        "movies": { "$ref": "#/$defs/Display" },
+        "episodes": { "$ref": "#/$defs/Display" },
+        "unknown": { "$ref": "#/$defs/Display" },
+        "blacklist": {
+          "type": "object",
+          "properties": {
+            "media_types": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "music",
+                  "movie",
+                  "episode",
+                  "livetv",
+                  "unknown",
+                  "audio",
+                  "song",
+                  "musicvideo",
+                  "tvchannel",
+                  "channel",
+                  "plugin"
+                ]
+              }
+            },
+            "libraries": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": true
+        },
+        "show_simple": { "type": "boolean" },
+        "append_prefix": { "type": "boolean" },
+        "add_divider": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "Instance": {
+      "type": "object",
+      "properties": {
+        "url": { "type": "string" },
+        "urls": { "type": "array", "items": { "type": "string" } },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "self_signed_cert": { "type": "boolean" },
+        "name": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "Display": {
+      "type": "object",
+      "properties": {
+        "display": {
+          "anyOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "string" },
+            {
+              "type": "object",
+              "properties": {
+                "details_text": { "type": "string" },
+                "state_text": { "type": "string" },
+                "image_text": { "type": "string" }
+              },
+              "additionalProperties": true
+            }
+          ]
+        },
+        "separator": { "type": "string" },
+        "status_display_type": {
+          "type": "string",
+          "enum": ["name", "state", "details"]
+        },
+        "poster_source": {
+          "type": "string",
+          "enum": ["season", "series", "episode", "still"]
+        },
+        "show_paused": { "type": "boolean" },
+        "buttons": { "type": "array", "items": { "$ref": "#/$defs/Button" } }
+      },
+      "additionalProperties": true
+    },
+    "Button": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "url": { "type": "string" }
+      },
+      "required": ["name", "url"],
+      "additionalProperties": true
+    },
+    "Discord": {
+      "type": "object",
+      "properties": {
+        "application_id": { "type": "string" },
+        "buttons": { "type": "array", "items": { "$ref": "#/$defs/Button" } },
+        "show_paused": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "Imgur": {
+      "type": "object",
+      "properties": {
+        "client_id": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "Images": {
+      "type": "object",
+      "properties": {
+        "enable_images": { "type": "boolean" },
+        "imgur_images": { "type": "boolean" },
+        "litterbox_images": { "type": "boolean" },
+        "process_images": { "type": "boolean" },
+        "size": { "type": "integer" },
+        "bg": { "type": "boolean" },
+        "bg_blur": { "type": "number" },
+        "corner_radius": { "type": "number" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

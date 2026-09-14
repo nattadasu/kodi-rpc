@@ -1,145 +1,226 @@
 # Configuration
 
-`kodi-rpc` reads one JSON file at startup (see `example.json` for a full
-template). Default locations:
+`kodi-rpc` reads one JSON file at startup (see `example.json` for a full template).
 
-- Linux/macOS: `~/.config/kodi-rpc/main.json`
-- Windows: `%appdata%\kodi-rpc\main.json`
+Default configuration locations:
 
-Override with `-c /path/to/main.json`. A legacy `{"jellyfin": {...}}` block
-from jellyfin-rpc is auto-mapped to `{"kodi": {...}}` (set
-`username`/`password` for Kodi HTTP auth).
+- **Linux/macOS**: `~/.config/kodi-rpc/main.json`
+- **Windows**: `%appdata%\kodi-rpc\main.json`
 
-## `kodi`
+Override the default location with `-c /path/to/main.json`.
 
-| Key | Type | Default | Notes |
-|---|---|---|---|
-| `url` | string | — | Base URL, e.g. `http://localhost:8080`. Ignored when `instances` is set. |
-| `urls` | array | `[]` | Alternate base URLs for this server (same credentials). Non-empty trumps `url`; each becomes a polled instance. |
-| `username` / `password` | string | `""` | Kodi HTTP auth (Settings → Services → Control). Empty = none. |
-| `self_signed_cert` | bool | `false` | Skip TLS verification. |
-| `instances` | array | `[]` | Extra servers, see below. Non-empty = top-level `url`/creds ignored. |
-| `music` / `movies` / `episodes` / `unknown` | object | — | Display sections, see below. |
-| `blacklist` | object | — | `media_types` + `libraries`, see below. |
-| `show_simple`, `append_prefix`, `add_divider` | bool | `false` | Legacy episode formatting (only when `episodes.display` is unset). |
+## Top-level Configuration Keys
 
-### Instances
+| Key | Type | Required | Description |
+| :--- | :---: | :---: | :--- |
+| `kodi` | [`Kodi`](#kodi) | Yes | Kodi server options, display configurations, and blacklists. |
+| `discord` | [`Discord`](#discord) | No | Discord application ID, global default buttons, and pause behavior. |
+| `imgur` | [`Imgur`](#imgur) | No | Imgur API credentials (`client_id`). |
+| `images` | [`Images`](#images) | No | Artwork processing and image pipeline options. |
+
+`kodi` is the only required top-level key. Unknown keys (e.g., `_comment`) are ignored throughout the configuration file.
+
+<details>
+<summary>JSON Schema (<code>schema.json</code>, click to expand)</summary>
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/nattadasu/kodi-rpc/main/schema.json",
+  "title": "kodi-rpc configuration",
+  "description": "Config file for kodi-rpc (default ~/.config/kodi-rpc/main.json). Unknown keys such as _comment are ignored.",
+  "type": "object",
+  "properties": {
+    "kodi": { "$ref": "#/$defs/Kodi" },
+    "discord": { "$ref": "#/$defs/Discord" },
+    "imgur": { "$ref": "#/$defs/Imgur" },
+    "images": { "$ref": "#/$defs/Images" }
+  },
+  "required": ["kodi"],
+  "additionalProperties": true,
+  "$defs": {
+    "Kodi": {
+      "type": "object",
+      "properties": {
+        "url": { "type": "string" },
+        "urls": { "type": "array", "items": { "type": "string" } },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "self_signed_cert": { "type": "boolean" },
+        "instances": { "type": "array", "items": { "$ref": "#/$defs/Instance" } },
+        "music": { "$ref": "#/$defs/Display" },
+        "movies": { "$ref": "#/$defs/Display" },
+        "episodes": { "$ref": "#/$defs/Display" },
+        "unknown": { "$ref": "#/$defs/Display" },
+        "blacklist": {
+          "type": "object",
+          "properties": {
+            "media_types": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "music",
+                  "movie",
+                  "episode",
+                  "livetv",
+                  "unknown",
+                  "audio",
+                  "song",
+                  "musicvideo",
+                  "tvchannel",
+                  "channel",
+                  "plugin"
+                ]
+              }
+            },
+            "libraries": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": true
+        },
+        "show_simple": { "type": "boolean" },
+        "append_prefix": { "type": "boolean" },
+        "add_divider": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "Instance": {
+      "type": "object",
+      "properties": {
+        "url": { "type": "string" },
+        "urls": { "type": "array", "items": { "type": "string" } },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "self_signed_cert": { "type": "boolean" },
+        "name": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "Display": {
+      "type": "object",
+      "properties": {
+        "display": {
+          "anyOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "string" },
+            {
+              "type": "object",
+              "properties": {
+                "details_text": { "type": "string" },
+                "state_text": { "type": "string" },
+                "image_text": { "type": "string" }
+              },
+              "additionalProperties": true
+            }
+          ]
+        },
+        "separator": { "type": "string" },
+        "status_display_type": {
+          "type": "string",
+          "enum": ["name", "state", "details"]
+        },
+        "poster_source": {
+          "type": "string",
+          "enum": ["season", "series", "episode", "still"]
+        },
+        "show_paused": { "type": "boolean" },
+        "buttons": { "type": "array", "items": { "$ref": "#/$defs/Button" } }
+      },
+      "additionalProperties": true
+    },
+    "Button": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "url": { "type": "string" }
+      },
+      "required": ["name", "url"],
+      "additionalProperties": true
+    },
+    "Discord": {
+      "type": "object",
+      "properties": {
+        "application_id": { "type": "string" },
+        "buttons": { "type": "array", "items": { "$ref": "#/$defs/Button" } },
+        "show_paused": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "Imgur": {
+      "type": "object",
+      "properties": {
+        "client_id": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "Images": {
+      "type": "object",
+      "properties": {
+        "enable_images": { "type": "boolean" },
+        "imgur_images": { "type": "boolean" },
+        "litterbox_images": { "type": "boolean" },
+        "process_images": { "type": "boolean" },
+        "size": { "type": "integer" },
+        "bg": { "type": "boolean" },
+        "bg_blur": { "type": "number" },
+        "corner_radius": { "type": "number" }
+      },
+      "additionalProperties": true
+    }
+  }
+}
+```
+
+</details>
+
+## Valid Keys
+
+### `kodi`
+
+Connection settings, display sections, and blacklists. While no individual key in `kodi` is mandatory, at least one valid server source (`url`, `urls`, or `instances`) must be provided for the application to function.
+
+| Key | Type | Required | Default | Description |
+| :--- | :---: | :---: | :---: | :--- |
+| `url` | `string` | No | `""` | Base URL of the Kodi HTTP server (e.g., `http://localhost:8080`). Ignored when `instances` or `urls` is configured. |
+| `urls` | `arr[string]` | No | `[]` | Alternate base URLs for this server (sharing the same credentials). Non-empty list overrides `url`; each URL is polled as an instance. |
+| `username` | `string` | No | `""` | Kodi HTTP authentication username (**Settings → Services → Control**). Leave empty if no authentication is required. |
+| `password` | `string` | No | `""` | Kodi HTTP authentication password (**Settings → Services → Control**). Leave empty if no authentication is required. |
+| `self_signed_cert` | `boolean` | No | `false` | Skip TLS certificate verification when connecting to Kodi over HTTPS. |
+| `instances` | [`arr[Instance]`](#kodiinstances) | No | `[]` | Array of additional Kodi server instances. Non-empty list overrides top-level `url`, `urls`, `username`, and `password`. |
+| `music` | [`Display`](#display) | No | `{}` | Music display configuration. |
+| `movies` | [`Display`](#display) | No | `{}` | Movie display configuration. |
+| `episodes` | [`Display`](#display) | No | `{}` | TV episode display configuration. |
+| `unknown` | [`Display`](#display) | No | `{}` | Unclassified stream and 3rd-party video plugin display configuration. |
+| `blacklist` | [`Blacklist`](#kodiblacklist) | No | `{}` | Filtering rules (`media_types` and `libraries`). |
+| `show_simple` | `boolean` | No | `false` | Legacy episode formatting option (only evaluated when [`episodes.display`](#display) is omitted). |
+| `append_prefix` | `boolean` | No | `false` | Legacy episode formatting option: adds leading zero to season/episode numbers under 10. |
+| `add_divider` | `boolean` | No | `false` | Legacy episode formatting option: adds divider between season and episode numbers. |
+
+#### `kodi.instances`
+
+Configures multiple Kodi servers:
 
 ```json
 "instances": [
-  {"url": "http://localhost:8080", "username": "kodi", "password": "kodi"},
-  {"url": "http://192.168.1.6:8080", "name": "bedroom"}
+  { "url": "http://localhost:8080", "username": "kodi", "password": "kodi" },
+  { "url": "http://192.168.1.6:8080", "name": "bedroom" }
 ]
 ```
 
-Every instance is polled each cycle. Whichever plays **first** owns the
-presence until it stops; a second playback never steals it. When the owner
-goes idle, the first playing instance in config order takes over. Dead
-instances are skipped. Each entry takes `url`, `username`, `password`,
-`self_signed_cert`, and `name` (log label, defaults to the URL); an entry
-may set `urls` instead of `url` (same failover expansion as top-level).
-Each RPC is capped at 10s so a stalled host can't freeze polling.
+| Key | Type | Required | Default | Description |
+| :--- | :---: | :---: | :---: | :--- |
+| `url` | `string` | No | `""` | Base URL for this server instance. May be omitted if `urls` is specified. |
+| `urls` | `arr[string]` | No | `[]` | Alternate base URLs for this server instance; overrides `url`. |
+| `username` | `string` | No | `""` | HTTP authentication username for this server instance. |
+| `password` | `string` | No | `""` | HTTP authentication password for this server instance. |
+| `self_signed_cert` | `boolean` | No | `false` | Skip TLS certificate verification for this server instance. |
+| `name` | `string` | No | server URL | Display label used in log output for this server instance. |
 
-## Display sections
+Every instance is polled during each poll cycle. The instance that starts playback first retains presence ownership until playback stops; subsequent playback on other instances will not override active presence. When the active instance becomes idle, the first playing instance in configuration order takes over. Unreachable instances are skipped automatically, with RPC timeouts capped at 10 seconds.
 
-Each of `music`, `movies`, `episodes`, `unknown` takes:
+#### `kodi.blacklist`
 
-| Key | Type | Notes |
-|---|---|---|
-| `display` | array / string / object | `["genres"]`, `"genres,year"`, or full `{details_text, state_text, image_text}`. |
-| `separator` | string | Replaces `{sep}` between fields. |
-| `status_display_type` | string | `name`, `state`, or `details`. Picks the member-list status line. Default `name` (app name). |
-| `poster_source` | string | Episodes only: `season` (default), `series`, or `episode` (still, no lookups). |
-| `show_paused` | bool | Show this section while paused. Unset = `discord.show_paused`. |
-| `buttons` | array | Buttons for this section. Unset = `discord.buttons`; `[]` hides all. |
-
-Up to 2 buttons shown per presence. `{"name": "dynamic", "url": "dynamic"}`
-entries fill from series/movie info (TMDB link, trailer); static entries
-show as-is. Labels cap at 32 chars, URLs over 512 are skipped, and buttons
-only render for other viewers. Paused sections show a static icon with no
-timestamps unless their `show_paused` is false, which clears the presence.
-
-In a full `{details_text, state_text, image_text}` object, `{__default}`
-stands for the section default: details → track / title / show-title /
-title (music / movies / episodes / unknown); state → `By {artists} {sep} `
-for music, `via {addon} {sep} {file-host}` for plugin playback, empty
-otherwise. With the array/string form you never write it — e.g.
-`"display": ["genres"], "separator": "-"` on music renders details
-`Midnight City`, state `By M83 - Electropop, Synthwave`.
-
-Unknown `{key}`s are left as-is; doubled or dangling `{sep}`s are cleaned
-up automatically.
-
-Keys per section, with example output:
-
-**music**
-
-| Key | Example |
-|---|---|
-| `{track}` | `Midnight City` |
-| `{album}` | `Hurry Up, We're Dreaming` |
-| `{artists}` | `M83` |
-| `{genres}` | `Electropop, Synthwave` |
-| `{year}` | `2011` |
-| `{version}` | `1.0.0` |
-| `{sep}` | separator |
-
-**movies**
-
-| Key | Example |
-|---|---|
-| `{title}` | `Blade Runner 2049` |
-| `{original-title}` | original title |
-| `{genres}` | `Sci-Fi, Drama` |
-| `{year}` | `2017` |
-| `{critic-score}` | `🍅 87/100` |
-| `{community-score}` | `⭐ 8.0/10` |
-| `{version}` | `1.0.0` |
-| `{sep}` | separator |
-
-E.g. details `{title} ({year})` → `Blade Runner 2049 (2017)`.
-
-**episodes**
-
-| Key | Example |
-|---|---|
-| `{show-title}` | `Tom Scott: England` |
-| `{title}` | `Episode 26` |
-| `{original-title}` | original title |
-| `{season}` | `1` |
-| `{season-padded}` | `01` |
-| `{episode}` | `26` |
-| `{episode-padded}` | `26` |
-| `{year}` | `2026` |
-| `{genres}` | `Travel` |
-| `{studio}` | `Nebula` |
-| `{version}` | `1.0.0` |
-| `{sep}` | separator |
-
-E.g. state `{season}x{episode-padded} - {title}` → `1x26 - Episode 26`.
-
-**unknown** (plugin/unclassified streams)
-
-| Key | Example |
-|---|---|
-| `{title}` | cleaned label |
-| `{label}` | raw label |
-| `{addon}` | `retrospect` (short id) |
-| `{addon-full}` | `plugin.video.retrospect` |
-| `{file-host}` | `www.crunchyroll.com` (proxied host for local playback proxies) |
-| `{genres}` | genres |
-| `{year}` | year |
-| `{studio}` | studio |
-| `{plot}` | synopsis |
-| `{version}` | `1.0.0` |
-| `{sep}` | separator |
-
-E.g. state `via {addon} {sep} {file-host}` → `via www.crunchyroll.com`
-when no addon id applies.
-
-Discord caps text at 128 chars (padded to 3 when shorter).
-
-## Blacklist
+Suppresses Rich Presence display for specified media types or path substrings:
 
 ```json
 "blacklist": {
@@ -148,38 +229,205 @@ Discord caps text at 128 chars (padded to 3 when shorter).
 }
 ```
 
-- `media_types`: `music` (also `audio`, `song`, `musicvideo`), `movie`,
-  `episode`, `livetv` (also `tvchannel`, `channel`), `unknown` (also
-  `plugin`; catches all plugin/unrecognized streams).
-- `libraries`: case-insensitive substrings matched against the Kodi `file`
-  path. Blacklisted content is skipped (presence left untouched).
+| Key | Type | Required | Default | Description |
+| :--- | :---: | :---: | :---: | :--- |
+| `media_types` | `arr[enum["music", "movie", "episode", "livetv", "unknown", "audio", "song", "musicvideo", "tvchannel", "channel", "plugin"]]` | No | `[]` | List of media types to filter out. Primary types: `"music"`, `"movie"`, `"episode"`, `"livetv"`, `"unknown"`. Aliases: `"audio"`, `"song"`, `"musicvideo"`, `"tvchannel"`, `"channel"`, `"plugin"`. |
+| `libraries` | `arr[string]` | No | `[]` | Case-insensitive substrings matched against the Kodi `file` path. Blacklisted content suppresses Discord presence updates. |
+
+## Display Configuration
+
+You can customize how playback details look in Discord presence for each media type (`music`, `movies`, `episodes`, `unknown`).
+
+### Display Formats
+
+`display` supports three valid variants:
+
+#### Array Format (`arr[string]`)
+
+An array of template field names. Each field is evaluated and appended to the standard status line, separated by your configured `separator`.
+
+```json
+"episodes": {
+  "display": ["genres", "year"],
+  "separator": " - "
+}
+```
+
+#### String Format (`string`)
+
+A single comma-separated string listing template field names. This is a quick shorthand for the array format.
+
+```json
+"episodes": {
+  "display": "genres,year",
+  "separator": " - "
+}
+```
+
+#### Object Format (`object`)
+
+A custom layout object giving you full line-by-line control over every text field in Discord presence.
+
+```json
+"episodes": {
+  "display": {
+    "details_text": "{show-title}",
+    "state_text": "S{season-padded}E{episode-padded} - {title}",
+    "image_text": "Watching on Kodi-RPC v{version}"
+  },
+  "separator": " - "
+}
+```
+
+The `display` object format accepts the following fields:
+
+| Key | Type | Required | Default | Description |
+| :--- | :---: | :---: | :---: | :--- |
+| `details_text` | `string` | No | Section default | First (top) line of text in Discord presence. |
+| `state_text` | `string` | No | Section default | Second line of text in Discord presence. |
+| `image_text` | `string` | No | `"Kodi-RPC v{version}"` | Hover tooltip text shown on the large cover artwork image. |
+
+### Display Options Table
+
+| Key | Type | Required | Default | Description |
+| :--- | :---: | :---: | :---: | :--- |
+| `display` | `arr[string]` \| `string` \| [`object`](#object-format-object) | No | Section default | Layout format for presence text (see variants above). |
+| `separator` | `string` | No | `"-"` | Character or text replacing `{sep}` placeholders between fields. |
+| `status_display_type` | `enum["name", "state", "details"]` | No | `"name"` | Controls member list status text on Discord: `"name"` (app name), `"state"`, or `"details"`. |
+| `poster_source` | `enum["season", "series", "episode", "still"]` | No | `"season"` | Episode artwork source: `"season"` (season poster, then series), `"series"` (series poster only), or `"episode"` / `"still"` (episode screenshot). |
+| `show_paused` | `boolean` | No | [`discord.show_paused`](#discord) | Show presence for this section while paused. Uses [`discord.show_paused`](#discord) if omitted. |
+| `buttons` | `arr[object]` | No | [`discord.buttons`](#discord) | Custom buttons for this section (`{ "name": "...", "url": "..." }`). Uses [`discord.buttons`](#discord) if omitted; `[]` hides all buttons. |
+
+### Default Line Formats
+
+If you don't specify custom line text, Kodi-RPC uses these defaults for each media type:
+
+- **Music (`music`)**:
+  - Details line: `{track}`
+  - State line: `By {artists}`
+  - Artwork hover text: `Kodi-RPC v{version}`
+- **Movies (`movies`)**:
+  - Details line: `{title}`
+  - State line: Empty
+  - Artwork hover text: `Kodi-RPC v{version}`
+- **Episodes (`episodes`)**:
+  - Details line: `{show-title}`
+  - State line: `S{season-padded}E{episode-padded} - {title}`
+  - Artwork hover text: `Kodi-RPC v{version}`
+- **Plugins / Streams (`unknown`)**:
+  - Details line: `{title}`
+  - State line: `via {addon} - {file-host}`
+  - Artwork hover text: `Kodi-RPC v{version}`
+
+Unrecognized template variables are displayed as normal text. Any duplicate or leftover `{sep}` separators are cleaned up automatically.
+
+Up to 2 buttons are displayed per activity. Buttons with `{"name": "dynamic", "url": "dynamic"}` automatically link to TMDB pages or trailers when available. Button labels are capped at 32 characters, and URLs over 512 characters are omitted.
+
+### Template Placeholders Reference
+
+Available placeholders per section:
+
+#### Music (`music`)
+
+| Placeholder | Example Output |
+| :--- | :--- |
+| `{track}` | `Midnight City` |
+| `{album}` | `Hurry Up, We're Dreaming` |
+| `{artists}` | `M83` |
+| `{genres}` | `Electropop, Synthwave` |
+| `{year}` | `2011` |
+| `{version}` | `1.0.0` |
+| `{sep}` | Separator string |
+
+#### Movies (`movies`)
+
+| Placeholder | Example Output |
+| :--- | :--- |
+| `{title}` | `Blade Runner 2049` |
+| `{original-title}` | Original movie title |
+| `{genres}` | `Sci-Fi, Drama` |
+| `{year}` | `2017` |
+| `{critic-score}` | `🍅 87/100` |
+| `{community-score}` | `⭐ 8.0/10` |
+| `{version}` | `1.0.0` |
+| `{sep}` | Separator string |
+
+Example: `details_text: "{title} ({year})"` → `Blade Runner 2049 (2017)`
+
+#### Episodes (`episodes`)
+
+| Placeholder | Example Output |
+| :--- | :--- |
+| `{show-title}` | `Tom Scott: England` |
+| `{title}` | `Episode 26` |
+| `{original-title}` | Original episode title |
+| `{season}` | `1` |
+| `{season-padded}` | `01` |
+| `{episode}` | `26` |
+| `{episode-padded}` | `26` |
+| `{year}` | `2026` |
+| `{genres}` | `Travel` |
+| `{studio}` | `Nebula` |
+| `{version}` | `1.0.0` |
+| `{sep}` | Separator string |
+
+Example: `state_text: "{season}x{episode-padded} - {title}"` → `1x26 - Episode 26`
+
+#### Unknown / Plugin Streams (`unknown`)
+
+| Placeholder | Example Output |
+| :--- | :--- |
+| `{title}` | Cleaned item label |
+| `{label}` | Raw item label |
+| `{addon}` | Addon ID (`retrospect`) |
+| `{addon-full}` | Full addon ID (`plugin.video.retrospect`) |
+| `{file-host}` | Domain host (`www.crunchyroll.com`) |
+| `{genres}` | Stream genres |
+| `{year}` | Release year |
+| `{studio}` | Studio name |
+| `{plot}` | Synopsis / plot summary |
+| `{version}` | `1.0.0` |
+| `{sep}` | Separator string |
+
+Example: `state_text: "via {addon} {sep} {file-host}"` → `via www.crunchyroll.com`
+
+> [!NOTE]
+> Discord limits presence text fields to 128 characters. Strings shorter than 3 characters are automatically padded.
 
 ## `discord`
 
-| Key | Type | Default | Notes |
-|---|---|---|---|
-| `application_id` | string | built-in | Custom Discord app ID. |
-| `buttons` | array | dynamic | Default buttons (see section overrides above). |
-| `show_paused` | bool | `true` | Default paused behavior (see section overrides above). |
+Global presence defaults and Discord app settings.
 
-## Images
+| Key | Type | Required | Default | Description |
+| :--- | :---: | :---: | :---: | :--- |
+| `application_id` | `string` | No | `"1549062924545556480"` | Custom Discord Application ID. |
+| `buttons` | `arr[object]` | No | Dynamic links | Default buttons for all sections unless overridden in a specific display section. |
+| `show_paused` | `boolean` | No | `true` | Default paused behavior unless overridden in a specific display section. |
 
-Artwork precedence: series/season/movie poster → episode still → fanart.
-Plugin/CDN `https://` art (including `image://`-wrapped remote art) is used
-directly. Kodi `image://` art is handed to Discord only when Kodi is
-publicly reachable *without* auth; otherwise it uploads (below) or falls
-back to the Kodi logo — an unfetchable `large_image` breaks the whole
-presence, not just the picture.
+## `imgur`
 
-| Key | Type | Default | Notes |
-|---|---|---|---|
-| `enable_images` | bool | `false` | Master toggle. |
-| `imgur_images` | bool | `false` | Upload art to Imgur (needs `imgur.client_id`). Permanent links. |
-| `litterbox_images` | bool | `false` | Upload to litterbox (catbox). Links die after 72h; cache evicts then. Corrupt entries evict and re-upload instead of erroring. |
-| `process_images` | bool | `true` | Square + blur into a 1:1 image before upload. |
-| `size` | number | original | Output canvas, e.g. `512`. |
-| `bg` / `bg_blur` / `corner_radius` | bool / number / number | `true` / `3.0` / `4.0` | Blurred background vs rounded corners. |
+Credentials for Imgur image hosting.
 
-Uploads are cached in `urls.json` (next to the config; override with
-`-i`), keyed by item + art source, so changed art re-uploads instead of
-serving stale uploads.
+| Key | Type | Required | Default | Description |
+| :--- | :---: | :---: | :---: | :--- |
+| `client_id` | `string` | No | `""` | Imgur API Client ID for uploading presence artwork. |
+
+## `images`
+
+Artwork pipeline, processing, and hosting configuration.
+
+Precedence order for artwork: Series/Season/Movie Poster → Episode Still → Fanart.
+Direct HTTP/HTTPS URLs (including remote `image://` URLs) are passed directly to Discord. Local Kodi `image://` artwork is served directly to Discord only if Kodi is publicly accessible without authentication. Otherwise, artwork must be uploaded (via Imgur or Litterbox) or falls back to default artwork.
+
+| Key | Type | Required | Default | Description |
+| :--- | :---: | :---: | :---: | :--- |
+| `enable_images` | `boolean` | No | `false` | Master toggle for artwork retrieval and processing. |
+| `imgur_images` | `boolean` | No | `false` | Upload artwork to Imgur (requires [`imgur.client_id`](#imgur)). Creates permanent links. |
+| `litterbox_images` | `boolean` | No | `false` | Upload artwork to Litterbox (Catbox). Links expire after 72 hours; cache evicts and re-uploads automatically. |
+| `process_images` | `boolean` | No | `true` | Crop and format artwork into a 1:1 square canvas before uploading. |
+| `size` | `integer` | No | Original size | Output canvas square dimensions in pixels (e.g., `512`). |
+| `bg` | `boolean` | No | `true` | Add a blurred background behind non-square artwork. |
+| `bg_blur` | `number` | No | `3.0` | Background blur radius percentage relative to canvas size. |
+| `corner_radius` | `number` | No | `4.0` | Corner rounding percentage (applied when `bg` is `false`). |
+
+Upload mappings are cached in `urls.json` alongside `main.json` (override location with `-i`).
