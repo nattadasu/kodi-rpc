@@ -3,14 +3,14 @@
 Program used to display what you're currently watching on Kodi in Discord.
 
 Hard clone of [jellyfin-rpc](https://github.com/justradical/jellyfin-rpc) by
-JustRadical, retargeted at the **Kodi JSON-RPC API** (`Player.GetActivePlayers`
-→ `Player.GetItem` → `Player.GetProperties`). The Discord presence layer
-(buttons, display templates, blacklist, imgur/litterbox artwork, paused icon,
-timestamps) is intentionally kept 1:1 so jellyfin-rpc configs and habits carry
-over.
+JustRadical, retargeted at the **Kodi JSON-RPC API**
+(`Player.GetActivePlayers` → `Player.GetItem` → `Player.GetProperties`).
+The Discord presence layer (buttons, display templates, blacklist,
+imgur/litterbox artwork, paused icon, timestamps) is intentionally kept 1:1
+so jellyfin-rpc configs and habits carry over.
 
-The only requirement is that Discord is open and logged in; kodi-rpc can run on
-the Kodi box itself or any machine that can reach Kodi over HTTP.
+The only requirement is that Discord is open and logged in; kodi-rpc can run
+on the Kodi box itself or any machine that can reach Kodi over HTTP.
 
 ## Kodi setup
 
@@ -21,6 +21,7 @@ the Kodi box itself or any machine that can reach Kodi over HTTP.
    - If you expose Kodi via reverse proxy (e.g. `https://kodi.example.com`),
      make sure `/jsonrpc` and `/image/*` are forwarded.
 2. Test it:
+
    ```bash
    curl -u kodi:kodi -X POST -H 'Content-Type: application/json' \
      -d '{"jsonrpc":"2.0","method":"Player.GetActivePlayers","id":1}' \
@@ -34,7 +35,13 @@ cargo build --release
 # binary: ./target/release/kodi-rpc
 ```
 
-Or grab a release binary and run the installer:
+or with [go-task](https://taskfile.dev) (see `Taskfile.yml` for all tasks):
+
+```bash
+task build
+```
+
+Alternatively, grab a release binary and run the installer:
 
 ```bash
 python3 scripts/installer.py
@@ -87,8 +94,22 @@ kodi-rpc -c ~/.config/kodi-rpc/main.json
 ```
 
 > Tip: if kodi-rpc runs on the Kodi box itself, prefer
-> `http://localhost:8080` over the public URL — same data, no
-> Cloudflare round-trip, and polling keeps working if the tunnel drops.
+> `http://localhost:8080` over the public URL — same data, no public
+> round-trip, and polling keeps working if the tunnel drops.
+
+## Usage
+
+CLI flags:
+
+```
+-c, --config <path>               Path to the config file
+-i, --image-urls-file <path>      Path to image urls cache (imgur/litterbox)
+-t, --wait-time <secs>            Poll interval [default: 7]
+-v, --log-level <level>           trace|debug|info|warn|error|off [default: info]
+```
+
+Legacy `{"jellyfin": {...}}` configs are auto-mapped to `{"kodi": {...}}`
+(`url` is reused; set `username`/`password` for Kodi HTTP auth).
 
 ## Multiple Kodi instances
 
@@ -101,18 +122,6 @@ skipped without affecting the rest. When `instances` is non-empty, the
 top-level `url`/`username`/`password` are ignored. Display templates,
 blacklist, and image settings stay global.
 
-CLI flags:
-
-```
--c, --config <path>          Path to the config file
--i, --image-urls-file <path> Path to image urls cache (imgur/litterbox)
--t, --wait-time <secs>       Poll interval [default: 7]
--v, --log-level <level>      trace|debug|info|warn|error|off [default: info]
-```
-
-Legacy `{"jellyfin": {...}}` configs are auto-mapped to `{"kodi": {...}}`
-(`url` is reused; set `username`/`password` for Kodi HTTP auth).
-
 ## 3rd-party plugin playback (the whole point of this fork)
 
 Kodi reports most addon streams as:
@@ -122,18 +131,19 @@ Kodi reports most addon streams as:
  "file": "plugin://plugin.video.foo/play?..."}
 ```
 
-and on repeat plays even library-mapped fields (`title`, `season`, …) go blank
-(upstream Kodi issue [#16245](https://github.com/xbmc/xbmc/issues/16245) —
-`Player.GetItem` falls back to the DB row which has no infolabels).
+and on repeat plays even library-mapped fields (`title`, `season`, …) go
+blank (upstream Kodi issue [#16245](https://github.com/xbmc/xbmc/issues/16245)
+— `Player.GetItem` falls back to the DB row which has no infolabels).
 
 kodi-rpc handles this explicitly:
 
 - `MediaType::Unknown` is **displayable** (only `None`/empty is hidden), so
   `plugin://` streams never vanish from Discord.
-- Title resolution: `title` → cleaned `label` → file name — something always shows.
+- Title resolution: `title` → cleaned `label` → file name — something always
+  shows.
 - `strip_kodi_tags()` removes `[COLOR]`, `[B]`, `[I]`, … from labels.
-- `addon_id` is extracted (`plugin://plugin.video.youtube/…` → `youtube`) and
-  exposed to templates as `{addon}` / `{addon-full}` plus `{file-host}`.
+- `addon_id` is extracted (`plugin://plugin.video.youtube/…` → `youtube`)
+  and exposed to templates as `{addon}` / `{addon-full}` plus `{file-host}`.
 - Unknown-length streams (no `totaltime`) show **without** a progress bar
   instead of being misreported as paused.
 - Artwork: `image://` thumbnails resolve via `GET /image/<encoded>` with the
@@ -156,15 +166,17 @@ Available `{…}` keys for `unknown`: `{title}`, `{label}`, `{addon}`,
 `{addon-full}`, `{file-host}`, `{genres}`, `{year}`, `{studio}`, `{plot}`,
 `{version}`, `{sep}`.
 
-Movies / episodes / music keep the jellyfin-rpc template keys
-(`{title}`, `{show-title}`, `{season}`, `{episode}`, `{track}`, `{artists}`,
-`{genres}`, … — see `example.json`).
+## Display templates & blacklist
+
+Movies / episodes / music keep the jellyfin-rpc template keys (`{title}`,
+`{show-title}`, `{season}`, `{episode}`, `{track}`, `{artists}`, `{genres}`,
+… — see `example.json`).
 
 Discord field limits (enforced automatically): details/state/image tooltips
 ≤ 128 chars (padded to 3 when shorter), max 2 buttons with labels ≤ 32 chars.
 
-Blacklist `libraries` entries match as **case-insensitive substrings** against
-the Kodi `file` path, so you can hide addons or shares:
+Blacklist `libraries` entries match as **case-insensitive substrings**
+against the Kodi `file` path, so you can hide addons or shares:
 
 ```json
 "blacklist": {
@@ -174,8 +186,8 @@ the Kodi `file` path, so you can hide addons or shares:
 ```
 
 `media_types` accepts `music`, `movie`, `episode`, `livetv`, `unknown`
-(plugin catch-all), plus legacy `book`/`audiobook` (unused by Kodi, kept so old
-configs still parse).
+(plugin catch-all), plus legacy `book`/`audiobook` (unused by Kodi, kept so
+old configs still parse).
 
 ## Artwork behavior (`show_images`)
 
@@ -209,3 +221,4 @@ direct URL → default icon. Two Kodi-specific rules:
 - Upstream: [JustRadical/jellyfin-rpc](https://github.com/justradical/jellyfin-rpc)
   (GPL-3.0-or-later; this fork keeps the same license).
 - Kodi JSON-RPC docs: <https://kodi.wiki/view/JSON-RPC_API>
+- This reimplementation was made possible with Muse Spark (`muse-spark-1.3`).
