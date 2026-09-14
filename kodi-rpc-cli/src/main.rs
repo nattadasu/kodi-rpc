@@ -239,18 +239,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Connected!");
 
     let mut currently_playing = String::new();
+    let mut currently_paused = false;
 
     loop {
         sleep(Duration::from_secs(args.wait_time as u64));
 
         match client.set_activity() {
             Ok(activity) => {
+                // Pause/play flips push a fresh presence even when the text
+                // matches: paused is static with no timer, playing restarts
+                // timestamps from the live position.
+                let paused = client.is_paused();
                 if activity.is_empty() && !currently_playing.is_empty() {
                     let _ = client.clear_activity();
                     info!("Cleared activity");
                     currently_playing = activity;
-                } else if activity != currently_playing {
+                    currently_paused = paused;
+                } else if activity != currently_playing || paused != currently_paused {
                     currently_playing = activity;
+                    currently_paused = paused;
 
                     info!("{}", currently_playing);
                 }

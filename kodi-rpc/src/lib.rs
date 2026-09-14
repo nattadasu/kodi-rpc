@@ -131,6 +131,14 @@ impl Client {
         Ok(())
     }
 
+    /// Whether the owned session is paused. False when idle.
+    pub fn is_paused(&self) -> bool {
+        self.session
+            .as_ref()
+            .map(|s| s.play_state.is_paused)
+            .unwrap_or(false)
+    }
+
     /// Polls Kodi and pushes the presence to Discord. Plugin
     /// (`type: "unknown"`) streams display like any other content.
     pub fn set_activity(&mut self) -> KodiResult<String> {
