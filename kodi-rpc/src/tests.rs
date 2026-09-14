@@ -1,5 +1,5 @@
 use crate::kodi::{KodiItem, NowPlayingItem, PlayState, PlayerGetPropertiesResult, Session};
-use crate::{Client, ClientBuilder, InstanceCfg, PosterSource};
+use crate::{Button, Client, ClientBuilder, InstanceCfg, PosterSource};
 
 #[test]
 fn owner_election_first_plays_wins() {
@@ -295,4 +295,22 @@ fn https_reverse_proxy_url() {
 
     let client = builder.build().expect("https url should build");
     drop(client);
+}
+
+#[test]
+fn overlong_button_urls_dropped() {
+    let mut b = ClientBuilder::new();
+    b.url("http://localhost:8080");
+    b.buttons(vec![
+        Button::new("ok".to_string(), "https://x.co/".to_string()),
+        Button::new(
+            "long".to_string(),
+            format!("https://x.co/{}", "y".repeat(600)),
+        ),
+    ]);
+    let mut c = b.build().unwrap();
+    c.session = Some(session_with_thumb(None, None));
+    let btns = c.get_buttons().unwrap();
+    assert_eq!(btns.len(), 1);
+    assert_eq!(btns[0].name, "ok");
 }

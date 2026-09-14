@@ -46,6 +46,7 @@ pub fn version_string() -> String {
 /// with 32-char labels.
 const MAX_TEXT_LEN: usize = 128;
 const MAX_BUTTON_LABEL_LEN: usize = 32;
+const MAX_BUTTON_URL_LEN: usize = 512;
 
 /// One Kodi server: URL + HTTP auth + a display name for logs.
 #[derive(Debug, Clone, Default)]
@@ -602,6 +603,15 @@ impl Client {
         Some(res.moviedetails)
     }
 
+    /// Drop buttons Discord would reject: a URL over 512 chars breaks the
+    /// whole presence, like an unfetchable image does.
+    fn usable_buttons(buttons: Vec<Button>) -> Vec<Button> {
+        buttons
+            .into_iter()
+            .filter(|b| b.url.chars().count() <= MAX_BUTTON_URL_LEN)
+            .collect()
+    }
+
     fn get_buttons(&self) -> Option<Vec<Button>> {
         let session = self.session.as_ref()?;
 
@@ -633,7 +643,7 @@ impl Client {
                     activity_buttons.push(button.clone())
                 }
             }
-            return Some(activity_buttons);
+            return Some(Self::usable_buttons(activity_buttons));
         } else if let Some(buttons) = self.buttons.as_ref() {
             for button in buttons {
                 if activity_buttons.len() == 2 {
@@ -644,7 +654,7 @@ impl Client {
                     activity_buttons.push(button.clone())
                 }
             }
-            return Some(activity_buttons);
+            return Some(Self::usable_buttons(activity_buttons));
         } else if let Some(ext_urls) = &session.now_playing_item.external_urls {
             let ext_urls: Vec<&kodi::ExternalUrl> = ext_urls
                 .iter()
@@ -657,7 +667,7 @@ impl Client {
 
                 activity_buttons.push(Button::new(ext_url.name.clone(), ext_url.url.clone()))
             }
-            return Some(activity_buttons);
+            return Some(Self::usable_buttons(activity_buttons));
         }
         None
     }
