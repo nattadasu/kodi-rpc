@@ -1,7 +1,9 @@
 use clap::Parser;
 use colored::Colorize;
 use config::{get_config_path, get_urls_path, Config};
-use kodi_rpc::{Client, DisplayFormat, EpisodeDisplayOptions, InstanceCfg, VERSION};
+use kodi_rpc::{
+    version_string, Client, DisplayFormat, EpisodeDisplayOptions, InstanceCfg, VERSION,
+};
 use log::{debug, error, info};
 use retry::retry_with_index;
 use simple_logger::SimpleLogger;
@@ -60,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init()
         .unwrap();
 
-    info!("Initializing Kodi-RPC");
+    info!("Initializing Kodi-RPC v{}", version_string());
 
     #[cfg(feature = "updates")]
     updates::checker();
@@ -116,7 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .image_background(conf.images.bg)
         .image_background_blur(conf.images.bg_blur)
         .image_corner_radius(conf.images.corner_radius)
-        .large_image_text(format!("Kodi-RPC v{}", VERSION.unwrap_or("UNKNOWN")))
+        .large_image_text(format!("Kodi-RPC v{}", version_string()))
         .imgur_urls_file_location(args.image_urls.clone().unwrap_or(get_urls_path()?))
         .litterbox_urls_file_location(args.image_urls.unwrap_or(get_urls_path()?));
 

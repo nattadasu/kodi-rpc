@@ -1,10 +1,17 @@
 name: Release
 
-# Attaches built binaries to published releases. Fires for stable releases
-# (created automatically by release-please) and manual prereleases alike.
+# Tagged release: pushing a tag (manually, or automatically by release-please
+# when its version PR merges) builds all six binaries and publishes them to
+# the GitHub release. Tags with a `-` suffix (e.g. `v0.2.0-beta.1`) publish
+# as prereleases; plain `vX.Y.Z` tags publish as stable.
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
+
+env:
+  # Tagged builds report the clean Cargo.toml version (no commit hash).
+  KODI_RPC_RELEASE: 1
 
 permissions:
   contents: write
@@ -53,6 +60,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
+          tag_name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref, '-') }}
           files: |
             target/release/kodi-rpc-x86_64-linux
 
@@ -100,6 +109,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
+          tag_name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref, '-') }}
           files: |
             target/armv7-unknown-linux-gnueabihf/release/kodi-rpc-arm32-linux
 
@@ -147,6 +158,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
+          tag_name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref, '-') }}
           files: |
             target/aarch64-unknown-linux-gnu/release/kodi-rpc-arm64-linux
 
@@ -190,6 +203,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
+          tag_name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref, '-') }}
           files: target/release/kodi-rpc.exe
 
   macos-x86_64:
@@ -236,6 +251,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
+          tag_name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref, '-') }}
           files: |
             target/x86_64-apple-darwin/release/kodi-rpc-x86_64-darwin
 
@@ -277,5 +294,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
+          tag_name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref, '-') }}
           files: |
             target/aarch64-apple-darwin/release/kodi-rpc-arm64-darwin

@@ -14,7 +14,7 @@ tasks:
       - task: build
 
   build:
-    desc: Compile the release binary to target/release/kodi-rpc
+    desc: Compile the release binary to target/release/kodi-rpc (local builds carry +<sha>; CI tags build clean via KODI_RPC_RELEASE=1)
     cmds:
       - cargo build --release -p {{.PKG}}
     sources:

@@ -29,6 +29,18 @@ pub(crate) type KodiResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 pub const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 
+/// Full version string: `CARGO_PKG_VERSION` plus the commit hash for
+/// snapshot (untagged) builds, e.g. `0.1.0+a1b2c3d`. Release builds
+/// (KODI_RPC_RELEASE=1, i.e. tags) report the clean version.
+pub fn version_string() -> String {
+    match option_env!("KODI_RPC_GIT_SHA") {
+        Some(sha) if !sha.is_empty() => {
+            format!("{}+{}", VERSION.unwrap_or("0.0.0"), sha)
+        }
+        _ => VERSION.unwrap_or("0.0.0").to_string(),
+    }
+}
+
 /// Discord activity field limits (discord.com/developers/docs): text fields
 /// cap at 128 chars (min 3, zero-width-padded below that), max 2 buttons
 /// with 32-char labels.

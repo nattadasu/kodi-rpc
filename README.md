@@ -41,6 +41,13 @@ or with [go-task](https://taskfile.dev) (see `Taskfile.yml` for all tasks):
 task build
 ```
 
+Untagged builds stamp the commit into the version (`v0.1.0+a1b2c3d`, shown
+at startup and in the presence tooltip) and CI uploads them as
+`kodi-rpc-<sha>-<platform>` artifacts. Tagged builds (`vX.Y.Z`, or
+`vX.Y.Z-beta.N` for prereleases) report the clean version and publish
+stable-named binaries to the GitHub release — the names `installer.py`
+downloads.
+
 Alternatively, grab a release binary and run the installer:
 
 ```bash

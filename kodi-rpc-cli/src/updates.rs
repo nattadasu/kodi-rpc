@@ -1,8 +1,14 @@
 use crate::VERSION;
 use colored::Colorize;
+use kodi_rpc::version_string;
 use log::warn;
 
 pub fn checker() {
+    // Snapshot builds (commit hash stamped in) can never match a release
+    // tag, so there is nothing to compare — stay quiet.
+    if version_string().contains('+') {
+        return;
+    }
     let current = VERSION.unwrap_or("0.0.0").to_string();
     let latest = get_latest_github().unwrap_or(current.clone());
     if latest != current {

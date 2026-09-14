@@ -35,6 +35,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set short SHA
+        run: echo "SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_ENV
+
       - name: Install latest rust toolchain
         uses: actions-rs/toolchain@v1
         with:
@@ -59,7 +62,7 @@ jobs:
           args: --workspace --locked --release
 
       - name: Rename binary
-        run: mv target/release/kodi-rpc target/release/kodi-rpc-x86_64-linux
+        run: mv target/release/kodi-rpc target/release/kodi-rpc-${SHORT_SHA}-x86_64-linux
 
       - name: Run cargo test
         uses: actions-rs/cargo@v1
@@ -70,8 +73,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux
-          path: target/release/kodi-rpc-x86_64-linux
+          name: linux-${{ env.SHORT_SHA }}
+          path: target/release/kodi-rpc-${{ env.SHORT_SHA }}-x86_64-linux
 
   ubuntu-arm32:
     runs-on: ubuntu-latest
@@ -79,6 +82,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set short SHA
+        run: echo "SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_ENV
 
       - name: Install latest rust toolchain
         uses: actions-rs/toolchain@v1
@@ -111,13 +117,13 @@ jobs:
           args: --target armv7-unknown-linux-gnueabihf --workspace --locked --release
 
       - name: Rename binary
-        run: mv target/armv7-unknown-linux-gnueabihf/release/kodi-rpc target/armv7-unknown-linux-gnueabihf/release/kodi-rpc-arm32-linux
+        run: mv target/armv7-unknown-linux-gnueabihf/release/kodi-rpc target/armv7-unknown-linux-gnueabihf/release/kodi-rpc-${SHORT_SHA}-arm32-linux
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-arm32
-          path: target/armv7-unknown-linux-gnueabihf/release/kodi-rpc-arm32-linux
+          name: linux-arm32-${{ env.SHORT_SHA }}
+          path: target/armv7-unknown-linux-gnueabihf/release/kodi-rpc-${{ env.SHORT_SHA }}-arm32-linux
 
   ubuntu-arm64:
     runs-on: ubuntu-latest
@@ -125,6 +131,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set short SHA
+        run: echo "SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_ENV
 
       - name: Install latest rust toolchain
         uses: actions-rs/toolchain@v1
@@ -157,13 +166,13 @@ jobs:
           args: --target aarch64-unknown-linux-gnu --workspace --locked --release
 
       - name: Rename binary
-        run: mv target/aarch64-unknown-linux-gnu/release/kodi-rpc target/aarch64-unknown-linux-gnu/release/kodi-rpc-arm64-linux
+        run: mv target/aarch64-unknown-linux-gnu/release/kodi-rpc target/aarch64-unknown-linux-gnu/release/kodi-rpc-${SHORT_SHA}-arm64-linux
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-arm64
-          path: target/aarch64-unknown-linux-gnu/release/kodi-rpc-arm64-linux
+          name: linux-arm64-${{ env.SHORT_SHA }}
+          path: target/aarch64-unknown-linux-gnu/release/kodi-rpc-${{ env.SHORT_SHA }}-arm64-linux
 
   windows:
     runs-on: windows-latest
@@ -171,6 +180,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set short SHA
+        run: echo "SHORT_SHA=$($env:GITHUB_SHA.Substring(0,7))" >> $env:GITHUB_ENV
 
       - name: Install latest rust toolchain
         uses: actions-rs/toolchain@v1
@@ -201,11 +213,14 @@ jobs:
           command: test
           args: --all-features --locked
 
+      - name: Rename binary
+        run: mv target/release/kodi-rpc.exe target/release/kodi-rpc-${{ env.SHORT_SHA }}.exe
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows
-          path: target/release/kodi-rpc.exe
+          name: windows-${{ env.SHORT_SHA }}
+          path: target/release/kodi-rpc-${{ env.SHORT_SHA }}.exe
 
   macos-x86_64:
     runs-on: macos-latest
@@ -213,6 +228,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set short SHA
+        run: echo "SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_ENV
 
       - name: Install latest rust toolchain
         uses: actions-rs/toolchain@v1
@@ -239,7 +257,7 @@ jobs:
           args: --target x86_64-apple-darwin --workspace --locked --release
 
       - name: Rename binary
-        run: mv target/x86_64-apple-darwin/release/kodi-rpc target/x86_64-apple-darwin/release/kodi-rpc-x86_64-darwin
+        run: mv target/x86_64-apple-darwin/release/kodi-rpc target/x86_64-apple-darwin/release/kodi-rpc-${SHORT_SHA}-x86_64-darwin
 
       - name: Run cargo test
         uses: actions-rs/cargo@v1
@@ -250,8 +268,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-x86_64
-          path: target/x86_64-apple-darwin/release/kodi-rpc-x86_64-darwin
+          name: macos-x86_64-${{ env.SHORT_SHA }}
+          path: target/x86_64-apple-darwin/release/kodi-rpc-${{ env.SHORT_SHA }}-x86_64-darwin
 
   macos-arm64:
     runs-on: macos-latest
@@ -259,6 +277,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set short SHA
+        run: echo "SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_ENV
 
       - name: Install latest rust toolchain
         uses: actions-rs/toolchain@v1
@@ -285,10 +306,10 @@ jobs:
           args: --target aarch64-apple-darwin --workspace --locked --release
 
       - name: Rename binary
-        run: mv target/aarch64-apple-darwin/release/kodi-rpc target/aarch64-apple-darwin/release/kodi-rpc-arm64-darwin
+        run: mv target/aarch64-apple-darwin/release/kodi-rpc target/aarch64-apple-darwin/release/kodi-rpc-${SHORT_SHA}-arm64-darwin
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-arm64
-          path: target/aarch64-apple-darwin/release/kodi-rpc-arm64-darwin
+          name: macos-arm64-${{ env.SHORT_SHA }}
+          path: target/aarch64-apple-darwin/release/kodi-rpc-${{ env.SHORT_SHA }}-arm64-darwin
