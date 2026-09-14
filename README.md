@@ -172,7 +172,8 @@ kodi-rpc handles this explicitly:
 
 Available `{…}` keys for `unknown`: `{title}`, `{label}`, `{addon}`,
 `{addon-full}`, `{file-host}`, `{genres}`, `{year}`, `{studio}`, `{plot}`,
-`{version}`, `{sep}`.
+`{version}`, `{sep}` — with example output for every key in
+[docs/configuration.md](docs/configuration.md).
 
 ## Display templates & blacklist
 
@@ -194,8 +195,9 @@ against the Kodi `file` path, so you can hide addons or shares:
 ```
 
 `media_types` accepts `music`, `movie`, `episode`, `livetv`, `unknown`
-(plugin catch-all), plus legacy `book`/`audiobook` (unused by Kodi, kept so
-old configs still parse).
+(plugin catch-all, also `plugin`). See
+[docs/configuration.md](docs/configuration.md) for aliases, per-key
+examples, and the full option reference.
 
 Dynamic (`"name": "dynamic", "url": "dynamic"`) buttons resolve from
 series/movie library info — a TMDB link and, for movies, the trailer link

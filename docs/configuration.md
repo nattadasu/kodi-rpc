@@ -49,28 +49,85 @@ Each of `music`, `movies`, `episodes`, `unknown` takes:
 | `status_display_type` | string | `name`, `state`, or `details`. Picks the member-list status line. Default `name` (app name). |
 | `poster_source` | string | Episodes only: `season` (default), `series`, or `episode` (still, no lookups). |
 
-`{__default}` inside a custom format expands to the section default
-(track / title / show-title). Unknown `{key}`s are left as-is; doubled or
-dangling `{sep}`s are cleaned up automatically.
+In a full `{details_text, state_text, image_text}` object, `{__default}`
+stands for the section default: details → track / title / show-title /
+title (music / movies / episodes / unknown); state → `By {artists} {sep} `
+for music, `via {addon} {sep} {file-host}` for plugin playback, empty
+otherwise. With the array/string form you never write it — e.g.
+`"display": ["genres"], "separator": "-"` on music renders details
+`Midnight City`, state `By M83 - Electropop, Synthwave`.
 
-Template keys per section:
+Unknown `{key}`s are left as-is; doubled or dangling `{sep}`s are cleaned
+up automatically.
 
-- **music** (`details` defaults to track, `state` to artists):
-  `{track}`, `{album}`, `{artists}`, `{genres}`, `{year}`, `{version}`, `{sep}`
-- **movies** (`details` defaults to title):
-  `{title}`, `{original-title}`, `{genres}`, `{year}`, `{critic-score}`,
-  `{community-score}`, `{version}`, `{sep}`
-- **episodes** (`details` defaults to show title):
-  `{show-title}`, `{title}`, `{original-title}`, `{episode}`,
-  `{episode-padded}`, `{season}`, `{season-padded}`, `{year}`, `{genres}`,
-  `{studio}`, `{version}`, `{sep}`
-- **unknown** — plugin/unclassified streams (`details` defaults to title):
-  `{title}`, `{label}`, `{addon}`, `{addon-full}`, `{file-host}`,
-  `{genres}`, `{year}`, `{studio}`, `{plot}`, `{version}`, `{sep}`
+Keys per section, with example output:
 
-`{addon}` is the short addon id (`plugin.video.youtube` → `youtube`);
-`{file-host}` is the stream host, or the proxied host for local playback
-proxies. Discord caps text at 128 chars (padded to 3 when shorter).
+**music**
+
+| Key | Example |
+|---|---|
+| `{track}` | `Midnight City` |
+| `{album}` | `Hurry Up, We're Dreaming` |
+| `{artists}` | `M83` |
+| `{genres}` | `Electropop, Synthwave` |
+| `{year}` | `2011` |
+| `{version}` | `0.2.0` |
+| `{sep}` | separator |
+
+**movies**
+
+| Key | Example |
+|---|---|
+| `{title}` | `Blade Runner 2049` |
+| `{original-title}` | original title |
+| `{genres}` | `Sci-Fi, Drama` |
+| `{year}` | `2017` |
+| `{critic-score}` | `🍅 87/100` |
+| `{community-score}` | `⭐ 8.0/10` |
+| `{version}` | `0.2.0` |
+| `{sep}` | separator |
+
+E.g. details `{title} ({year})` → `Blade Runner 2049 (2017)`.
+
+**episodes**
+
+| Key | Example |
+|---|---|
+| `{show-title}` | `Tom Scott: England` |
+| `{title}` | `Episode 26` |
+| `{original-title}` | original title |
+| `{season}` | `1` |
+| `{season-padded}` | `01` |
+| `{episode}` | `26` |
+| `{episode-padded}` | `26` |
+| `{year}` | `2026` |
+| `{genres}` | `Travel` |
+| `{studio}` | `Nebula` |
+| `{version}` | `0.2.0` |
+| `{sep}` | separator |
+
+E.g. state `{season}x{episode-padded} - {title}` → `1x26 - Episode 26`.
+
+**unknown** (plugin/unclassified streams)
+
+| Key | Example |
+|---|---|
+| `{title}` | cleaned label |
+| `{label}` | raw label |
+| `{addon}` | `retrospect` (short id) |
+| `{addon-full}` | `plugin.video.retrospect` |
+| `{file-host}` | `www.crunchyroll.com` (proxied host for local playback proxies) |
+| `{genres}` | genres |
+| `{year}` | year |
+| `{studio}` | studio |
+| `{plot}` | synopsis |
+| `{version}` | `0.2.0` |
+| `{sep}` | separator |
+
+E.g. state `via {addon} {sep} {file-host}` → `via www.crunchyroll.com`
+when no addon id applies.
+
+Discord caps text at 128 chars (padded to 3 when shorter).
 
 ## Blacklist
 
@@ -81,9 +138,9 @@ proxies. Discord caps text at 128 chars (padded to 3 when shorter).
 }
 ```
 
-- `media_types`: `music`, `movie`, `episode`, `livetv`, `unknown`
-  (plugin catch-all), plus `musicvideo`, `channel`, `picture` and legacy
-  `book`/`audiobook`.
+- `media_types`: `music` (also `audio`, `song`, `musicvideo`), `movie`,
+  `episode`, `livetv` (also `tvchannel`, `channel`), `unknown` (also
+  `plugin`; catches all plugin/unrecognized streams).
 - `libraries`: case-insensitive substrings matched against the Kodi `file`
   path. Blacklisted content is skipped (presence left untouched).
 

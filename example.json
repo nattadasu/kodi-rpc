@@ -35,7 +35,7 @@
         "show_simple": false,
         "append_prefix": false,
         "add_divider": false,
-        "_comment": "blacklist libraries matches against Kodi file paths (substrings). Media types: music, movie, episode, livetv, unknown, musicvideo, channel, picture",
+        "_comment": "blacklist libraries matches against Kodi file paths (substrings). Media types: music, movie, episode, livetv, unknown (aliases: audio/song/musicvideo, tvchannel/channel, plugin)",
         "blacklist": {
             "media_types": [],
             "libraries": []
