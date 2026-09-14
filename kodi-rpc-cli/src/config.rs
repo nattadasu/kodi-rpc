@@ -58,16 +58,21 @@ pub struct DisplayOptions {
     pub status_display_type: Option<StatusType>,
     /// Episode artwork: season poster, series poster, or episode still.
     pub poster_source: PosterSource,
+    /// Show this section while paused. Resolved: section value wins,
+    /// otherwise the discord default.
+    pub show_paused: bool,
+    /// Buttons for this section. Resolved: section value wins (even an
+    /// empty list, which hides all buttons), otherwise the discord default.
+    pub buttons: Option<Vec<Button>>,
 }
 
-/// Discord configuration
+/// Discord configuration.
+///
+/// `show_paused` / `buttons` live here only as defaults: each display
+/// section resolves its own value from them at load time.
 pub struct Discord {
     /// Set a custom Application ID to be used.
     pub application_id: Option<String>,
-    /// Set custom buttons to be displayed.
-    pub buttons: Option<Vec<Button>>,
-    /// Show status when media is paused
-    pub show_paused: bool,
 }
 
 /// Images configuration
@@ -142,6 +147,8 @@ pub struct DisplayOptionsBuilder {
     pub separator: Option<String>,
     pub status_display_type: Option<String>,
     pub poster_source: Option<String>,
+    pub show_paused: Option<bool>,
+    pub buttons: Option<Vec<Button>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -297,6 +304,8 @@ impl ConfigBuilder {
         Option<String>,
         Option<StatusType>,
         PosterSource,
+        Option<bool>,
+        Option<Vec<Button>>,
     ) {
         if let Some(opts) = input {
             let display = opts.display.map(|disp| match disp {
@@ -312,21 +321,52 @@ impl ConfigBuilder {
                 .poster_source
                 .map(PosterSource::from)
                 .unwrap_or_default();
-            (display, separator, status, poster_source)
+            (
+                display,
+                separator,
+                status,
+                poster_source,
+                opts.show_paused,
+                opts.buttons,
+            )
         } else {
-            (None, None, None, PosterSource::default())
+            (None, None, None, PosterSource::default(), None, None)
         }
     }
 
     pub fn build(self) -> Config {
-        let (music_display, music_separator, music_status_display_type, music_poster) =
-            Self::parse_display_options(self.kodi.music);
-        let (movie_display, movie_separator, movie_status_display_type, movies_poster) =
-            Self::parse_display_options(self.kodi.movies);
-        let (episode_display, episode_separator, episode_status_display_type, episodes_poster) =
-            Self::parse_display_options(self.kodi.episodes);
-        let (unknown_display, unknown_separator, unknown_status_display_type, unknown_poster) =
-            Self::parse_display_options(self.kodi.unknown);
+        let (
+            music_display,
+            music_separator,
+            music_status_display_type,
+            music_poster,
+            music_paused,
+            music_buttons,
+        ) = Self::parse_display_options(self.kodi.music);
+        let (
+            movie_display,
+            movie_separator,
+            movie_status_display_type,
+            movies_poster,
+            movies_paused,
+            movies_buttons,
+        ) = Self::parse_display_options(self.kodi.movies);
+        let (
+            episode_display,
+            episode_separator,
+            episode_status_display_type,
+            episodes_poster,
+            episodes_paused,
+            episodes_buttons,
+        ) = Self::parse_display_options(self.kodi.episodes);
+        let (
+            unknown_display,
+            unknown_separator,
+            unknown_status_display_type,
+            unknown_poster,
+            unknown_paused,
+            unknown_buttons,
+        ) = Self::parse_display_options(self.kodi.unknown);
 
         let media_types;
         let libraries;
@@ -419,24 +459,32 @@ impl ConfigBuilder {
                     separator: music_separator,
                     status_display_type: music_status_display_type,
                     poster_source: music_poster,
+                    show_paused: music_paused.unwrap_or(show_paused),
+                    buttons: music_buttons.or(buttons.clone()),
                 },
                 movies: DisplayOptions {
                     display: movie_display,
                     separator: movie_separator,
                     status_display_type: movie_status_display_type,
                     poster_source: movies_poster,
+                    show_paused: movies_paused.unwrap_or(show_paused),
+                    buttons: movies_buttons.or(buttons.clone()),
                 },
                 episodes: DisplayOptions {
                     display: episode_display,
                     separator: episode_separator,
                     status_display_type: episode_status_display_type,
                     poster_source: episodes_poster,
+                    show_paused: episodes_paused.unwrap_or(show_paused),
+                    buttons: episodes_buttons.or(buttons.clone()),
                 },
                 unknown: DisplayOptions {
                     display: unknown_display,
                     separator: unknown_separator,
                     status_display_type: unknown_status_display_type,
                     poster_source: unknown_poster,
+                    show_paused: unknown_paused.unwrap_or(show_paused),
+                    buttons: unknown_buttons.or(buttons.clone()),
                 },
                 blacklist: Blacklist {
                     media_types,
@@ -446,11 +494,7 @@ impl ConfigBuilder {
                 append_prefix: self.kodi.append_prefix.unwrap_or(false),
                 add_divider: self.kodi.add_divider.unwrap_or(false),
             },
-            discord: Discord {
-                application_id,
-                buttons,
-                show_paused,
-            },
+            discord: Discord { application_id },
             imgur: Imgur { client_id },
             images: Images {
                 enable_images,

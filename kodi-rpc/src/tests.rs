@@ -301,7 +301,7 @@ fn https_reverse_proxy_url() {
 fn overlong_button_urls_dropped() {
     let mut b = ClientBuilder::new();
     b.url("http://localhost:8080");
-    b.buttons(vec![
+    b.episodes_buttons(vec![
         Button::new("ok".to_string(), "https://x.co/".to_string()),
         Button::new(
             "long".to_string(),
@@ -309,8 +309,51 @@ fn overlong_button_urls_dropped() {
         ),
     ]);
     let mut c = b.build().unwrap();
-    c.session = Some(session_with_thumb(None, None));
+    let mut s = session_with_thumb(None, None);
+    s.now_playing_item.media_type = crate::MediaType::Episode;
+    c.session = Some(s);
     let btns = c.get_buttons().unwrap();
     assert_eq!(btns.len(), 1);
     assert_eq!(btns[0].name, "ok");
+}
+
+#[test]
+fn per_section_show_paused() {
+    let mut b = ClientBuilder::new();
+    b.url("http://localhost:8080").episodes_show_paused(false);
+    let c = b.build().unwrap();
+    assert!(!c.episodes_display_options.show_paused);
+    assert!(c.music_display_options.show_paused);
+    assert!(c.movies_display_options.show_paused);
+    assert!(c.unknown_display_options.show_paused);
+}
+
+#[test]
+fn per_section_buttons() {
+    let mut b = ClientBuilder::new();
+    b.url("http://localhost:8080")
+        .movies_buttons(vec![Button::new(
+            "site".to_string(),
+            "https://x.co/".to_string(),
+        )]);
+    let c = b.build().unwrap();
+    assert_eq!(c.movies_display_options.buttons.unwrap().len(), 1);
+    assert!(c.music_display_options.buttons.is_none());
+    assert!(c.episodes_display_options.buttons.is_none());
+    assert!(c.unknown_display_options.buttons.is_none());
+}
+
+#[test]
+fn is_paused_reflects_session() {
+    let mut c = client_for("http://localhost:8080", "kodi", "kodi");
+    assert!(!c.is_paused());
+    c.session = Some(session_with_thumb(None, None));
+    assert!(!c.is_paused());
+    let mut s = session_with_thumb(None, None);
+    s.play_state = crate::kodi::PlayState {
+        is_paused: true,
+        position_ticks: None,
+    };
+    c.session = Some(s);
+    assert!(c.is_paused());
 }

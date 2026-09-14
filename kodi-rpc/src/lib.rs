@@ -89,13 +89,11 @@ pub struct Client {
     session: Option<Session>,
     /// Which instance owns the presence (first-plays-wins).
     session_owner: Option<usize>,
-    buttons: Option<Vec<Button>>,
     music_display_options: DisplayOptions,
     movies_display_options: DisplayOptions,
     episodes_display_options: DisplayOptions,
     unknown_display_options: DisplayOptions,
     blacklist: Blacklist,
-    show_paused: bool,
     show_images: bool,
     imgur_options: ImgurOptions,
     litterbox_options: LitterboxOptions,
@@ -188,10 +186,15 @@ impl Client {
 
             let mut timestamps = Timestamps::new();
 
+            // Per-type behavior: paused handling and buttons come from the
+            // playing section's own options.
+            let show_paused = self
+                .display_options(session.now_playing_item.media_type)
+                .show_paused;
             match session.get_time()? {
                 PlayTime::Some(start, end) => timestamps = timestamps.start(start).end(end),
                 PlayTime::None => (),
-                PlayTime::Paused if self.show_paused => {
+                PlayTime::Paused if show_paused => {
                     assets = assets
                         .small_image("https://i.imgur.com/wlHSvYy.png")
                         .small_text("Paused");
@@ -612,14 +615,26 @@ impl Client {
             .collect()
     }
 
+    fn display_options(&self, media_type: MediaType) -> &DisplayOptions {
+        match media_type {
+            MediaType::Music => &self.music_display_options,
+            MediaType::Movie => &self.movies_display_options,
+            MediaType::Episode => &self.episodes_display_options,
+            _ => &self.unknown_display_options,
+        }
+    }
+
     fn get_buttons(&self) -> Option<Vec<Button>> {
         let session = self.session.as_ref()?;
+        let conf_buttons = &self
+            .display_options(session.now_playing_item.media_type)
+            .buttons;
 
         let mut activity_buttons: Vec<Button> = Vec::new();
 
         if let (Some(ext_urls), Some(buttons)) = (
             &session.now_playing_item.external_urls,
-            self.buttons.as_ref(),
+            conf_buttons.as_ref(),
         ) {
             let ext_urls: Vec<&kodi::ExternalUrl> = ext_urls
                 .iter()
@@ -644,7 +659,7 @@ impl Client {
                 }
             }
             return Some(Self::usable_buttons(activity_buttons));
-        } else if let Some(buttons) = self.buttons.as_ref() {
+        } else if let Some(buttons) = conf_buttons.as_ref() {
             for button in buttons {
                 if activity_buttons.len() == 2 {
                     break;
@@ -1242,6 +1257,8 @@ struct DisplayOptions {
     display: DisplayFormat,
     status_display_type: StatusType,
     poster_source: PosterSource,
+    show_paused: bool,
+    buttons: Option<Vec<Button>>,
 }
 
 /// Which artwork episodes use for the presence image.
@@ -1441,26 +1458,32 @@ pub struct ClientBuilder {
     client_id: String,
     self_signed: bool,
     extra_instances: Vec<InstanceCfg>,
-    buttons: Option<Vec<Button>>,
     episode_divider: bool,
     episode_prefix: bool,
     episode_simple: bool,
     music_separator: String,
     music_display: DisplayFormat,
     music_status_display_type: StatusType,
+    music_show_paused: bool,
+    music_buttons: Option<Vec<Button>>,
     movies_separator: String,
     movies_display: DisplayFormat,
     movies_status_display_type: StatusType,
+    movies_show_paused: bool,
+    movies_buttons: Option<Vec<Button>>,
     episodes_separator: String,
     episodes_display: DisplayFormat,
     episodes_status_display_type: StatusType,
     episodes_poster_source: PosterSource,
+    episodes_show_paused: bool,
+    episodes_buttons: Option<Vec<Button>>,
     unknown_separator: String,
     unknown_display: DisplayFormat,
     unknown_status_display_type: StatusType,
+    unknown_show_paused: bool,
+    unknown_buttons: Option<Vec<Button>>,
     blacklist_media_types: Vec<MediaType>,
     blacklist_libraries: Vec<String>,
-    show_paused: bool,
     show_images: bool,
     use_imgur: bool,
     imgur_client_id: String,
@@ -1496,7 +1519,10 @@ impl ClientBuilder {
                 state_text: Some("via {addon} {sep} {file-host}".to_string()),
                 image_text: Some("Kodi-RPC v{version}".to_string()),
             },
-            show_paused: true,
+            music_show_paused: true,
+            movies_show_paused: true,
+            episodes_show_paused: true,
+            unknown_show_paused: true,
             process_images: true,
             image_background: true,
             image_background_blur: 3.0,
@@ -1545,11 +1571,6 @@ impl ClientBuilder {
     }
 
     /// buttons to be displayed on the activity.
-    pub fn buttons(&mut self, buttons: Vec<Button>) -> &mut Self {
-        self.buttons = Some(buttons);
-        self
-    }
-
     pub fn episode_divider(&mut self, val: bool) -> &mut Self {
         self.episode_divider = val;
         self
@@ -1580,6 +1601,18 @@ impl ClientBuilder {
         self
     }
 
+    /// Show music activity when paused.
+    pub fn music_show_paused(&mut self, val: bool) -> &mut Self {
+        self.music_show_paused = val;
+        self
+    }
+
+    /// Buttons for music activity. Empty vec = no buttons.
+    pub fn music_buttons(&mut self, buttons: Vec<Button>) -> &mut Self {
+        self.music_buttons = Some(buttons);
+        self
+    }
+
     pub fn movies_separator<T: Into<String>>(&mut self, separator: T) -> &mut Self {
         self.movies_separator = separator.into();
         self
@@ -1592,6 +1625,18 @@ impl ClientBuilder {
 
     pub fn movies_status_display_type(&mut self, status_type: StatusType) -> &mut Self {
         self.movies_status_display_type = status_type;
+        self
+    }
+
+    /// Show movie activity when paused.
+    pub fn movies_show_paused(&mut self, val: bool) -> &mut Self {
+        self.movies_show_paused = val;
+        self
+    }
+
+    /// Buttons for movie activity. Empty vec = no buttons.
+    pub fn movies_buttons(&mut self, buttons: Vec<Button>) -> &mut Self {
+        self.movies_buttons = Some(buttons);
         self
     }
 
@@ -1616,6 +1661,18 @@ impl ClientBuilder {
         self
     }
 
+    /// Show episode activity when paused.
+    pub fn episodes_show_paused(&mut self, val: bool) -> &mut Self {
+        self.episodes_show_paused = val;
+        self
+    }
+
+    /// Buttons for episode activity. Empty vec = no buttons.
+    pub fn episodes_buttons(&mut self, buttons: Vec<Button>) -> &mut Self {
+        self.episodes_buttons = Some(buttons);
+        self
+    }
+
     pub fn unknown_separator<T: Into<String>>(&mut self, separator: T) -> &mut Self {
         self.unknown_separator = separator.into();
         self
@@ -1628,6 +1685,18 @@ impl ClientBuilder {
 
     pub fn unknown_status_display_type(&mut self, status_type: StatusType) -> &mut Self {
         self.unknown_status_display_type = status_type;
+        self
+    }
+
+    /// Show plugin/unknown activity when paused.
+    pub fn unknown_show_paused(&mut self, val: bool) -> &mut Self {
+        self.unknown_show_paused = val;
+        self
+    }
+
+    /// Buttons for plugin/unknown activity. Empty vec = no buttons.
+    pub fn unknown_buttons(&mut self, buttons: Vec<Button>) -> &mut Self {
+        self.unknown_buttons = Some(buttons);
         self
     }
 
@@ -1645,11 +1714,6 @@ impl ClientBuilder {
     }
 
     /// Show activity when paused.
-    pub fn show_paused(&mut self, val: bool) -> &mut Self {
-        self.show_paused = val;
-        self
-    }
-
     /// Show images from Kodi on the activity.
     pub fn show_images(&mut self, val: bool) -> &mut Self {
         self.show_images = val;
@@ -1777,36 +1841,42 @@ impl ClientBuilder {
             instances,
             session: None,
             session_owner: None,
-            buttons: self.buttons,
             music_display_options: DisplayOptions {
                 separator: self.music_separator,
                 display: self.music_display,
                 status_display_type: self.music_status_display_type,
                 poster_source: PosterSource::default(),
+                show_paused: self.music_show_paused,
+                buttons: self.music_buttons,
             },
             movies_display_options: DisplayOptions {
                 separator: self.movies_separator,
                 display: self.movies_display,
                 status_display_type: self.movies_status_display_type,
                 poster_source: PosterSource::default(),
+                show_paused: self.movies_show_paused,
+                buttons: self.movies_buttons,
             },
             episodes_display_options: DisplayOptions {
                 separator: self.episodes_separator,
                 display: self.episodes_display,
                 status_display_type: self.episodes_status_display_type,
                 poster_source: self.episodes_poster_source,
+                show_paused: self.episodes_show_paused,
+                buttons: self.episodes_buttons,
             },
             unknown_display_options: DisplayOptions {
                 separator: self.unknown_separator,
                 display: self.unknown_display,
                 status_display_type: self.unknown_status_display_type,
                 poster_source: PosterSource::default(),
+                show_paused: self.unknown_show_paused,
+                buttons: self.unknown_buttons,
             },
             blacklist: Blacklist {
                 media_types: self.blacklist_media_types,
                 libraries_names: self.blacklist_libraries,
             },
-            show_paused: self.show_paused,
             show_images: self.show_images,
             imgur_options: ImgurOptions {
                 enabled: self.use_imgur,

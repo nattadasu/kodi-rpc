@@ -109,7 +109,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .episode_simple(conf.kodi.show_simple)
         .episode_divider(conf.kodi.add_divider)
         .episode_prefix(conf.kodi.append_prefix)
-        .show_paused(conf.discord.show_paused)
         .show_images(conf.images.enable_images)
         .use_imgur(conf.images.imgur_images)
         .use_litterbox(conf.images.litterbox_images)
@@ -137,6 +136,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         builder.music_status_display_type(status_display_type);
     }
 
+    builder.music_show_paused(conf.kodi.music.show_paused);
+    if let Some(buttons) = conf.kodi.music.buttons {
+        debug!("Found config.kodi.music.buttons");
+        builder.music_buttons(buttons);
+    }
+
     if let Some(display) = conf.kodi.movies.display {
         debug!("Found config.kodi.movies.display");
         builder.movies_display(display);
@@ -150,6 +155,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(status_display_type) = conf.kodi.movies.status_display_type {
         debug!("Found config.kodi.movies.status_display_type");
         builder.movies_status_display_type(status_display_type);
+    }
+
+    builder.movies_show_paused(conf.kodi.movies.show_paused);
+    if let Some(buttons) = conf.kodi.movies.buttons {
+        debug!("Found config.kodi.movies.buttons");
+        builder.movies_buttons(buttons);
     }
 
     if let Some(display) = conf.kodi.episodes.display {
@@ -174,6 +185,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         builder.episodes_status_display_type(status_display_type);
     }
 
+    builder.episodes_show_paused(conf.kodi.episodes.show_paused);
+    if let Some(buttons) = conf.kodi.episodes.buttons {
+        debug!("Found config.kodi.episodes.buttons");
+        builder.episodes_buttons(buttons);
+    }
+
     builder.episodes_poster_source(conf.kodi.episodes.poster_source);
 
     if let Some(display) = conf.kodi.unknown.display {
@@ -191,6 +208,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         builder.unknown_status_display_type(status_display_type);
     }
 
+    builder.unknown_show_paused(conf.kodi.unknown.show_paused);
+    if let Some(buttons) = conf.kodi.unknown.buttons {
+        debug!("Found config.kodi.unknown.buttons");
+        builder.unknown_buttons(buttons);
+    }
+
     if let Some(media_types) = conf.kodi.blacklist.media_types {
         debug!("Found config.kodi.blacklist.media_types");
         debug!("Blacklisted MediaTypes: {:?}", media_types);
@@ -206,11 +229,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(application_id) = conf.discord.application_id {
         debug!("Found config.discord.application_id");
         builder.client_id(application_id);
-    }
-
-    if let Some(buttons) = conf.discord.buttons {
-        debug!("Found config.discord.buttons");
-        builder.buttons(buttons);
     }
 
     if let Some(client_id) = conf.imgur.client_id {
