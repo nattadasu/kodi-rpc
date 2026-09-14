@@ -177,20 +177,3 @@ presence, not just the picture.
 Uploads are cached in `urls.json` (next to the config; override with
 `-i`), keyed by item + art source, so changed art re-uploads instead of
 serving stale uploads.
-
-## CLI flags
-
-```
--c, --config <path>               Path to the config file
--i, --image-urls-file <path>      Path to image urls cache (imgur/litterbox)
--t, --wait-time <secs>            Poll interval [default: 7]
--v, --log-level <level>           trace|debug|info|warn|error|off [default: info]
-```
-
-## Versions
-
-Untagged builds report `0.2.0+<sha>` (startup log, presence tooltip) and
-CI uploads them as `kodi-rpc-<sha>-<platform>` artifacts. Tagged builds
-(`vX.Y.Z`, `vX.Y.Z-beta.N` for prereleases) report the clean version and
-publish stable-named binaries to the GitHub release. The update checker
-stays quiet for hash-stamped builds.
