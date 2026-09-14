@@ -56,7 +56,8 @@ python3 scripts/installer.py
 
 ## Setup
 
-Copy `example.json` to your config location and edit it:
+Copy `example.json` to your config location and edit it (full option
+reference: [docs/configuration.md](docs/configuration.md)):
 
 - Linux/macOS: `~/.config/kodi-rpc/main.json`
 - Windows: `%appdata%\kodi-rpc\main.json`
