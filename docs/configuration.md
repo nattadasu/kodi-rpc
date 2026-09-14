@@ -81,7 +81,7 @@ Keys per section, with example output:
 | `{artists}` | `M83` |
 | `{genres}` | `Electropop, Synthwave` |
 | `{year}` | `2011` |
-| `{version}` | `0.2.0` |
+| `{version}` | `1.0.0` |
 | `{sep}` | separator |
 
 **movies**
@@ -94,7 +94,7 @@ Keys per section, with example output:
 | `{year}` | `2017` |
 | `{critic-score}` | `🍅 87/100` |
 | `{community-score}` | `⭐ 8.0/10` |
-| `{version}` | `0.2.0` |
+| `{version}` | `1.0.0` |
 | `{sep}` | separator |
 
 E.g. details `{title} ({year})` → `Blade Runner 2049 (2017)`.
@@ -113,7 +113,7 @@ E.g. details `{title} ({year})` → `Blade Runner 2049 (2017)`.
 | `{year}` | `2026` |
 | `{genres}` | `Travel` |
 | `{studio}` | `Nebula` |
-| `{version}` | `0.2.0` |
+| `{version}` | `1.0.0` |
 | `{sep}` | separator |
 
 E.g. state `{season}x{episode-padded} - {title}` → `1x26 - Episode 26`.
@@ -131,7 +131,7 @@ E.g. state `{season}x{episode-padded} - {title}` → `1x26 - Episode 26`.
 | `{year}` | year |
 | `{studio}` | studio |
 | `{plot}` | synopsis |
-| `{version}` | `0.2.0` |
+| `{version}` | `1.0.0` |
 | `{sep}` | separator |
 
 E.g. state `via {addon} {sep} {file-host}` → `via www.crunchyroll.com`
