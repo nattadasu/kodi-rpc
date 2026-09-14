@@ -48,7 +48,7 @@ python3 scripts/installer.py
 
 Tagged builds (`vX.Y.Z`, `vX.Y.Z-beta.N` for prereleases) publish
 stable-named binaries to the GitHub release — the names `installer.py`
-downloads. Untagged builds carry the commit hash (`v1.0.0+a1b2c3d`) and go
+downloads. Untagged builds carry the commit hash (`v1.1.0+a1b2c3d`) and go
 to CI artifacts.
 
 ## Setup

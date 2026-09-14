@@ -336,7 +336,7 @@ Available placeholders per section:
 | `{artists}` | `M83` |
 | `{genres}` | `Electropop, Synthwave` |
 | `{year}` | `2011` |
-| `{version}` | `1.0.0` |
+| `{version}` | `1.1.0` |
 | `{sep}` | Separator string |
 
 #### Movies (`movies`)
@@ -349,7 +349,7 @@ Available placeholders per section:
 | `{year}` | `2017` |
 | `{critic-score}` | `🍅 87/100` |
 | `{community-score}` | `⭐ 8.0/10` |
-| `{version}` | `1.0.0` |
+| `{version}` | `1.1.0` |
 | `{sep}` | Separator string |
 
 Example: `details_text: "{title} ({year})"` → `Blade Runner 2049 (2017)`
@@ -368,7 +368,7 @@ Example: `details_text: "{title} ({year})"` → `Blade Runner 2049 (2017)`
 | `{year}` | `2026` |
 | `{genres}` | `Travel` |
 | `{studio}` | `Nebula` |
-| `{version}` | `1.0.0` |
+| `{version}` | `1.1.0` |
 | `{sep}` | Separator string |
 
 Example: `state_text: "{season}x{episode-padded} - {title}"` → `1x26 - Episode 26`
@@ -386,7 +386,7 @@ Example: `state_text: "{season}x{episode-padded} - {title}"` → `1x26 - Episode
 | `{year}` | Release year |
 | `{studio}` | Studio name |
 | `{plot}` | Synopsis / plot summary |
-| `{version}` | `1.0.0` |
+| `{version}` | `1.1.0` |
 | `{sep}` | Separator string |
 
 Example: `state_text: "via {addon} {sep} {file-host}"` → `via www.crunchyroll.com`

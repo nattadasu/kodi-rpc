@@ -1,6 +1,6 @@
 [package]
 name         = "kodi-rpc-cli"
-version      = "1.0.0"
+version      = "1.1.0"
 edition      = "2021"
 description  = "Displays the content you're currently watching on Kodi in Discord!"
 license      = "GPL-3.0-or-later"
@@ -30,7 +30,7 @@ serde_json            = "1.0"
 
 [dependencies.kodi-rpc]
 path = "../kodi-rpc"
-version = "1.0.0"
+version = "1.1.0"
 
 [dependencies.clap]
 features = ["derive"]
