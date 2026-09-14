@@ -119,6 +119,10 @@ pub struct KodiBuilder {
     pub url: String,
     pub username: Option<String>,
     pub password: Option<String>,
+    /// Alternate base URLs for this server. When non-empty, each entry
+    /// becomes its own polled instance (same credentials) and `url` is
+    /// ignored.
+    pub urls: Option<Vec<String>>,
     /// Extra servers. When non-empty, the top-level url/credentials are ignored.
     pub instances: Option<Vec<KodiInstanceBuilder>>,
     pub music: Option<DisplayOptionsBuilder>,
@@ -139,6 +143,10 @@ pub struct KodiInstanceBuilder {
     pub password: Option<String>,
     pub self_signed_cert: Option<bool>,
     pub name: Option<String>,
+    /// Alternate base URLs for this server. When non-empty, each entry
+    /// becomes its own polled instance (same credentials) and `url` is
+    /// ignored.
+    pub urls: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -254,6 +262,7 @@ impl ConfigBuilder {
                 url: "".to_string(),
                 username: None,
                 password: None,
+                urls: None,
                 instances: None,
                 music: None,
                 movies: None,
@@ -430,26 +439,68 @@ impl ConfigBuilder {
             image_corner_radius = Some(4.0);
         }
 
+        // One entry becomes one polled instance per URL in its `urls`
+        // list (trumping `url`), or a single instance from `url`.
+        fn expand(
+            url: &str,
+            urls: Option<&Vec<String>>,
+            username: Option<String>,
+            password: Option<String>,
+            self_signed_cert: Option<bool>,
+            name: Option<String>,
+        ) -> Vec<KodiInstance> {
+            let targets: Vec<String> = match urls {
+                Some(list) if list.iter().any(|u| !u.trim().is_empty()) => list
+                    .iter()
+                    .filter(|u| !u.trim().is_empty())
+                    .cloned()
+                    .collect(),
+                _ => vec![url.to_string()],
+            };
+            targets
+                .into_iter()
+                .filter(|u| !u.trim().is_empty())
+                .map(|u| {
+                    let display = name.clone().unwrap_or_else(|| u.clone());
+                    KodiInstance {
+                        name: display,
+                        url: u,
+                        username: username.clone().unwrap_or_default(),
+                        password: password.clone().unwrap_or_default(),
+                        self_signed_cert: self_signed_cert.unwrap_or(false),
+                    }
+                })
+                .collect()
+        }
+
         let instances: Vec<KodiInstance> = match &self.kodi.instances {
-            Some(list) if list.iter().any(|i| !i.url.is_empty()) => list
+            Some(list) if list.iter().any(|i| !i.url.is_empty() || has_urls(&i.urls)) => list
                 .iter()
-                .filter(|i| !i.url.is_empty())
-                .map(|i| KodiInstance {
-                    name: i.name.clone().unwrap_or_else(|| i.url.clone()),
-                    url: i.url.clone(),
-                    username: i.username.clone().unwrap_or_default(),
-                    password: i.password.clone().unwrap_or_default(),
-                    self_signed_cert: i.self_signed_cert.unwrap_or(false),
+                .flat_map(|i| {
+                    expand(
+                        &i.url,
+                        i.urls.as_ref(),
+                        i.username.clone(),
+                        i.password.clone(),
+                        i.self_signed_cert,
+                        i.name.clone(),
+                    )
                 })
                 .collect(),
-            _ => vec![KodiInstance {
-                name: self.kodi.url.clone(),
-                url: self.kodi.url.clone(),
-                username: self.kodi.username.clone().unwrap_or_default(),
-                password: self.kodi.password.clone().unwrap_or_default(),
-                self_signed_cert: self.kodi.self_signed_cert.unwrap_or(false),
-            }],
+            _ => expand(
+                &self.kodi.url,
+                self.kodi.urls.as_ref(),
+                self.kodi.username.clone(),
+                self.kodi.password.clone(),
+                self.kodi.self_signed_cert,
+                None,
+            ),
         };
+
+        fn has_urls(urls: &Option<Vec<String>>) -> bool {
+            urls.as_ref()
+                .is_some_and(|list| list.iter().any(|u| !u.trim().is_empty()))
+        }
 
         Config {
             kodi: Kodi {

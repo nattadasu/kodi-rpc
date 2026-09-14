@@ -15,6 +15,7 @@ from jellyfin-rpc is auto-mapped to `{"kodi": {...}}` (set
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `url` | string | — | Base URL, e.g. `http://localhost:8080`. Ignored when `instances` is set. |
+| `urls` | array | `[]` | Alternate base URLs for this server (same credentials). Non-empty trumps `url`; each becomes a polled instance. |
 | `username` / `password` | string | `""` | Kodi HTTP auth (Settings → Services → Control). Empty = none. |
 | `self_signed_cert` | bool | `false` | Skip TLS verification. |
 | `instances` | array | `[]` | Extra servers, see below. Non-empty = top-level `url`/creds ignored. |
@@ -34,8 +35,9 @@ from jellyfin-rpc is auto-mapped to `{"kodi": {...}}` (set
 Every instance is polled each cycle. Whichever plays **first** owns the
 presence until it stops; a second playback never steals it. When the owner
 goes idle, the first playing instance in config order takes over. Dead
-instances are skipped. Each entry takes `url` (required), `username`,
-`password`, `self_signed_cert`, and `name` (log label, defaults to the URL).
+instances are skipped. Each entry takes `url`, `username`, `password`,
+`self_signed_cert`, and `name` (log label, defaults to the URL); an entry
+may set `urls` instead of `url` (same failover expansion as top-level).
 Each RPC is capped at 10s so a stalled host can't freeze polling.
 
 ## Display sections
@@ -48,6 +50,14 @@ Each of `music`, `movies`, `episodes`, `unknown` takes:
 | `separator` | string | Replaces `{sep}` between fields. |
 | `status_display_type` | string | `name`, `state`, or `details`. Picks the member-list status line. Default `name` (app name). |
 | `poster_source` | string | Episodes only: `season` (default), `series`, or `episode` (still, no lookups). |
+| `show_paused` | bool | Show this section while paused. Unset = `discord.show_paused`. |
+| `buttons` | array | Buttons for this section. Unset = `discord.buttons`; `[]` hides all. |
+
+Up to 2 buttons shown per presence. `{"name": "dynamic", "url": "dynamic"}`
+entries fill from series/movie info (TMDB link, trailer); static entries
+show as-is. Labels cap at 32 chars, URLs over 512 are skipped, and buttons
+only render for other viewers. Paused sections show a static icon with no
+timestamps unless their `show_paused` is false, which clears the presence.
 
 In a full `{details_text, state_text, image_text}` object, `{__default}`
 stands for the section default: details → track / title / show-title /
@@ -149,12 +159,8 @@ Discord caps text at 128 chars (padded to 3 when shorter).
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `application_id` | string | built-in | Custom Discord app ID. |
-| `buttons` | array | dynamic | Up to 2 shown. `{"name": "dynamic", "url": "dynamic"}` fills from series/movie info (TMDB link, trailer). Labels cap at 32 chars; overlong URLs are skipped. Buttons only render for other viewers. |
-| `show_paused` | bool | `true` | Show presence while paused (static icon, no timer). `false` clears it. |
-
-Pause/play flips always push a fresh presence even when the text matches:
-paused shows the icon with no timestamps, resume restarts them from the
-live position.
+| `buttons` | array | dynamic | Default buttons (see section overrides above). |
+| `show_paused` | bool | `true` | Default paused behavior (see section overrides above). |
 
 ## Images
 

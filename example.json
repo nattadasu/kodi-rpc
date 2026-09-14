@@ -5,6 +5,8 @@
         "password": "kodi",
         "_comment_instances": "multi-instance: add an 'instances' array of {url, username, password, self_signed_cert, name}; every instance is polled and whichever plays first owns the presence until it stops. When non-empty, the top-level url/username/password above are ignored.",
         "instances": [],
+        "_comment_urls": "urls: alternate base URLs for one server (same credentials); each becomes a polled instance and trumps url. Also accepted per instances[] entry.",
+        "urls": [],
         "music": {
             "display": ["genres"],
             "separator": "-"
