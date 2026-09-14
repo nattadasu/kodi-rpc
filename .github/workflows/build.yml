@@ -6,7 +6,28 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
+  fmt:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install latest rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+          default: true
+          override: true
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
   ubuntu:
     runs-on: ubuntu-latest
 
@@ -22,7 +43,7 @@ jobs:
           override: true
 
       - name: Cache target folder
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
           cache-name: target-folder
         with:
@@ -38,7 +59,7 @@ jobs:
           args: --workspace --locked --release
 
       - name: Rename binary
-        run: mv target/release/jellyfin-rpc target/release/jellyfin-rpc-x86_64-linux
+        run: mv target/release/kodi-rpc target/release/kodi-rpc-x86_64-linux
 
       - name: Run cargo test
         uses: actions-rs/cargo@v1
@@ -50,15 +71,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: target/release/jellyfin-rpc-x86_64-linux
+          path: target/release/kodi-rpc-x86_64-linux
 
   ubuntu-arm32:
     runs-on: ubuntu-latest
-  
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-  
+
       - name: Install latest rust toolchain
         uses: actions-rs/toolchain@v1
         with:
@@ -66,14 +87,14 @@ jobs:
           target: armv7-unknown-linux-gnueabihf
           default: true
           override: true
-  
+
       - name: Update apt and install ARM32 gcc
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf
-  
+
       - name: Cache target folder
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
           cache-name: target-folder
         with:
@@ -81,30 +102,30 @@ jobs:
           key: arm32-linux-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             arm32-linux-
-  
+
       - name: Build for ARM32 Linux
         uses: actions-rs/cargo@v1
         with:
           use-cross: true
           command: build
           args: --target armv7-unknown-linux-gnueabihf --workspace --locked --release
-  
+
       - name: Rename binary
-        run: mv target/armv7-unknown-linux-gnueabihf/release/jellyfin-rpc target/armv7-unknown-linux-gnueabihf/release/jellyfin-rpc-arm32-linux
-  
+        run: mv target/armv7-unknown-linux-gnueabihf/release/kodi-rpc target/armv7-unknown-linux-gnueabihf/release/kodi-rpc-arm32-linux
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-arm32
-          path: target/armv7-unknown-linux-gnueabihf/release/jellyfin-rpc-arm32-linux
+          path: target/armv7-unknown-linux-gnueabihf/release/kodi-rpc-arm32-linux
 
   ubuntu-arm64:
     runs-on: ubuntu-latest
-  
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-  
+
       - name: Install latest rust toolchain
         uses: actions-rs/toolchain@v1
         with:
@@ -112,14 +133,14 @@ jobs:
           target: aarch64-unknown-linux-gnu
           default: true
           override: true
-      
+
       - name: Update apt and install ARM64 gcc
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
-  
+
       - name: Cache target folder
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
           cache-name: target-folder
         with:
@@ -127,7 +148,7 @@ jobs:
           key: arm64-linux-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             arm64-linux-
-  
+
       - name: Build for ARM64 Linux
         uses: actions-rs/cargo@v1
         with:
@@ -136,13 +157,13 @@ jobs:
           args: --target aarch64-unknown-linux-gnu --workspace --locked --release
 
       - name: Rename binary
-        run: mv target/aarch64-unknown-linux-gnu/release/jellyfin-rpc target/aarch64-unknown-linux-gnu/release/jellyfin-rpc-arm64-linux        
+        run: mv target/aarch64-unknown-linux-gnu/release/kodi-rpc target/aarch64-unknown-linux-gnu/release/kodi-rpc-arm64-linux
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-arm64
-          path: target/aarch64-unknown-linux-gnu/release/jellyfin-rpc-arm64-linux
+          path: target/aarch64-unknown-linux-gnu/release/kodi-rpc-arm64-linux
 
   windows:
     runs-on: windows-latest
@@ -159,7 +180,7 @@ jobs:
           override: true
 
       - name: Cache target folder
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
           cache-name: target-folder
         with:
@@ -184,7 +205,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: target/release/jellyfin-rpc.exe
+          path: target/release/kodi-rpc.exe
 
   macos-x86_64:
     runs-on: macos-latest
@@ -202,7 +223,7 @@ jobs:
           override: true
 
       - name: Cache target folder
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
           cache-name: target-folder
         with:
@@ -218,7 +239,7 @@ jobs:
           args: --target x86_64-apple-darwin --workspace --locked --release
 
       - name: Rename binary
-        run: mv target/x86_64-apple-darwin/release/jellyfin-rpc target/x86_64-apple-darwin/release/jellyfin-rpc-x86_64-darwin
+        run: mv target/x86_64-apple-darwin/release/kodi-rpc target/x86_64-apple-darwin/release/kodi-rpc-x86_64-darwin
 
       - name: Run cargo test
         uses: actions-rs/cargo@v1
@@ -230,7 +251,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: macos-x86_64
-          path: target/x86_64-apple-darwin/release/jellyfin-rpc-x86_64-darwin
+          path: target/x86_64-apple-darwin/release/kodi-rpc-x86_64-darwin
 
   macos-arm64:
     runs-on: macos-latest
@@ -248,7 +269,7 @@ jobs:
           override: true
 
       - name: Cache target folder
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
           cache-name: target-folder
         with:
@@ -264,10 +285,10 @@ jobs:
           args: --target aarch64-apple-darwin --workspace --locked --release
 
       - name: Rename binary
-        run: mv target/aarch64-apple-darwin/release/jellyfin-rpc target/aarch64-apple-darwin/release/jellyfin-rpc-arm64-darwin
+        run: mv target/aarch64-apple-darwin/release/kodi-rpc target/aarch64-apple-darwin/release/kodi-rpc-arm64-darwin
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-arm64
-          path: target/aarch64-apple-darwin/release/jellyfin-rpc-arm64-darwin
+          path: target/aarch64-apple-darwin/release/kodi-rpc-arm64-darwin

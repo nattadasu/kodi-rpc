@@ -1,8 +1,13 @@
 name: Release
 
+# Attaches built binaries to published releases. Fires for stable releases
+# (created automatically by release-please) and manual prereleases alike.
 on:
   release:
     types: [published]
+
+permissions:
+  contents: write
 
 jobs:
   ubuntu:
@@ -20,7 +25,7 @@ jobs:
           override: true
 
       - name: Cache target folder
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
           cache-name: target-folder
         with:
@@ -36,7 +41,7 @@ jobs:
           args: --workspace --locked --release
 
       - name: Rename binary
-        run: mv target/release/jellyfin-rpc target/release/jellyfin-rpc-x86_64-linux
+        run: mv target/release/kodi-rpc target/release/kodi-rpc-x86_64-linux
 
       - name: Run cargo test
         uses: actions-rs/cargo@v1
@@ -45,21 +50,19 @@ jobs:
           args: --all-features --locked
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/release/jellyfin-rpc-x86_64-linux
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            target/release/kodi-rpc-x86_64-linux
 
   ubuntu-arm32:
     runs-on: ubuntu-latest
-  
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-  
+
       - name: Install latest rust toolchain
         uses: actions-rs/toolchain@v1
         with:
@@ -67,14 +70,14 @@ jobs:
           target: armv7-unknown-linux-gnueabihf
           default: true
           override: true
-  
+
       - name: Update apt and install ARM32 gcc
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf
-    
+
       - name: Cache target folder
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
           cache-name: target-folder
         with:
@@ -82,33 +85,31 @@ jobs:
           key: arm32-linux-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             arm32-linux-
-  
+
       - name: Build for ARM32 Linux
         uses: actions-rs/cargo@v1
         with:
           use-cross: true
           command: build
           args: --target armv7-unknown-linux-gnueabihf --workspace --locked --release
-  
+
       - name: Rename binary
-        run: mv target/armv7-unknown-linux-gnueabihf/release/jellyfin-rpc target/armv7-unknown-linux-gnueabihf/release/jellyfin-rpc-arm32-linux
+        run: mv target/armv7-unknown-linux-gnueabihf/release/kodi-rpc target/armv7-unknown-linux-gnueabihf/release/kodi-rpc-arm32-linux
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/armv7-unknown-linux-gnueabihf/release/jellyfin-rpc-arm32-linux
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            target/armv7-unknown-linux-gnueabihf/release/kodi-rpc-arm32-linux
 
   ubuntu-arm64:
     runs-on: ubuntu-latest
-  
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-  
+
       - name: Install latest rust toolchain
         uses: actions-rs/toolchain@v1
         with:
@@ -116,14 +117,14 @@ jobs:
           target: aarch64-unknown-linux-gnu
           default: true
           override: true
-  
+
       - name: Update apt and install ARM64 gcc
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
-    
+
       - name: Cache target folder
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
           cache-name: target-folder
         with:
@@ -131,7 +132,7 @@ jobs:
           key: arm64-linux-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             arm64-linux-
-  
+
       - name: Build for ARM64 Linux
         uses: actions-rs/cargo@v1
         with:
@@ -140,16 +141,14 @@ jobs:
           args: --target aarch64-unknown-linux-gnu --workspace --locked --release
 
       - name: Rename binary
-        run: mv target/aarch64-unknown-linux-gnu/release/jellyfin-rpc target/aarch64-unknown-linux-gnu/release/jellyfin-rpc-arm64-linux  
+        run: mv target/aarch64-unknown-linux-gnu/release/kodi-rpc target/aarch64-unknown-linux-gnu/release/kodi-rpc-arm64-linux
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/aarch64-unknown-linux-gnu/release/jellyfin-rpc-arm64-linux
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            target/aarch64-unknown-linux-gnu/release/kodi-rpc-arm64-linux
 
   windows:
     runs-on: windows-latest
@@ -166,7 +165,7 @@ jobs:
           override: true
 
       - name: Cache target folder
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
           cache-name: target-folder
         with:
@@ -188,12 +187,10 @@ jobs:
           args: --all-features --locked
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: target/release/jellyfin-rpc.exe
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: target/release/kodi-rpc.exe
 
   macos-x86_64:
     runs-on: macos-latest
@@ -211,7 +208,7 @@ jobs:
           override: true
 
       - name: Cache target folder
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
           cache-name: target-folder
         with:
@@ -227,7 +224,7 @@ jobs:
           args: --target x86_64-apple-darwin --workspace --locked --release
 
       - name: Rename binary
-        run: mv target/x86_64-apple-darwin/release/jellyfin-rpc target/x86_64-apple-darwin/release/jellyfin-rpc-x86_64-darwin
+        run: mv target/x86_64-apple-darwin/release/kodi-rpc target/x86_64-apple-darwin/release/kodi-rpc-x86_64-darwin
 
       - name: Run cargo test
         uses: actions-rs/cargo@v1
@@ -236,13 +233,11 @@ jobs:
           args: --all-features --locked
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/x86_64-apple-darwin/release/jellyfin-rpc-x86_64-darwin
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            target/x86_64-apple-darwin/release/kodi-rpc-x86_64-darwin
 
   macos-arm64:
     runs-on: macos-latest
@@ -260,7 +255,7 @@ jobs:
           override: true
 
       - name: Cache target folder
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         env:
           cache-name: target-folder
         with:
@@ -276,13 +271,11 @@ jobs:
           args: --target aarch64-apple-darwin --workspace --locked --release
 
       - name: Rename binary
-        run: mv target/aarch64-apple-darwin/release/jellyfin-rpc target/aarch64-apple-darwin/release/jellyfin-rpc-arm64-darwin
+        run: mv target/aarch64-apple-darwin/release/kodi-rpc target/aarch64-apple-darwin/release/kodi-rpc-arm64-darwin
 
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/aarch64-apple-darwin/release/jellyfin-rpc-arm64-darwin
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            target/aarch64-apple-darwin/release/kodi-rpc-arm64-darwin

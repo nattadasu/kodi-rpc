@@ -1,0 +1,24 @@
+name: Release Please
+
+# Drives stable releases from conventional commits: opens/updates a
+# `chore: release X.Y.Z` PR (bumping both crates + CHANGELOG.md), and tagging
+# + publishing the GitHub release on merge. For prereleases, push a tag like
+# `v0.2.0-beta.1` and mark the release as prerelease — release.yml attaches
+# binaries to either kind automatically.
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run release-please
+        uses: googleapis/release-please-action@v4
+        with:
+          release-type: rust
