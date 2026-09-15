@@ -256,8 +256,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .unwrap();
     info!("Connected!");
 
+    let instance_names = client.instance_names();
+    if instance_names.len() > 1 {
+        info!(
+            "Listening to {} Kodi instances: {}",
+            instance_names.len(),
+            instance_names.join(", ")
+        );
+    } else if let Some(name) = instance_names.first() {
+        info!("Listening to Kodi at {}", name);
+    }
+
+    // Whether several instances share this log: the owning server is only
+    // worth naming when there is more than one to tell apart.
+    let show_source = instance_names.len() > 1;
+
     let mut currently_playing = String::new();
     let mut currently_paused = false;
+    let mut currently_source: Option<String> = None;
 
     loop {
         sleep(Duration::from_secs(args.wait_time as u64));
@@ -268,16 +284,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // matches: paused is static with no timer, playing restarts
                 // timestamps from the live position.
                 let paused = client.is_paused();
+                let source = client.session_source_name();
                 if activity.is_empty() && !currently_playing.is_empty() {
                     let _ = client.clear_activity();
                     info!("Cleared activity");
                     currently_playing = activity;
                     currently_paused = paused;
-                } else if activity != currently_playing || paused != currently_paused {
+                    currently_source = source;
+                } else if activity != currently_playing
+                    || paused != currently_paused
+                    || source != currently_source
+                {
                     currently_playing = activity;
                     currently_paused = paused;
+                    currently_source = source;
 
-                    info!("{}", currently_playing);
+                    let status = if currently_paused {
+                        "paused"
+                    } else {
+                        "playing"
+                    };
+                    if show_source {
+                        info!(
+                            "[{} @ {}] {}",
+                            status,
+                            currently_source.as_deref().unwrap_or("?"),
+                            currently_playing
+                        );
+                    } else {
+                        info!("[{}] {}", status, currently_playing);
+                    }
                 }
             }
             Err(err) => {

@@ -143,6 +143,19 @@ impl Client {
             .unwrap_or(false)
     }
 
+    /// Display names of all watched instances, in config order.
+    pub fn instance_names(&self) -> Vec<String> {
+        self.instances.iter().map(|i| i.name.clone()).collect()
+    }
+
+    /// Display name of the instance owning the current session, if any.
+    pub fn session_source_name(&self) -> Option<String> {
+        self.session
+            .as_ref()
+            .and_then(|s| self.instances.get(s.source))
+            .map(|i| i.name.clone())
+    }
+
     /// Polls Kodi and pushes the presence to Discord. Plugin
     /// (`type: "unknown"`) streams display like any other content.
     pub fn set_activity(&mut self) -> KodiResult<String> {
