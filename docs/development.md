@@ -32,9 +32,9 @@ cargo test -p kodi-rpc -- --ignored --nocapture live_
 ## Releases
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/)
-(`feat:`, `fix:`, `docs:`, `chore:`, …) — release-please reads them to open
-version-bump PRs automatically; merging one tags and publishes the stable
-release with all six platform binaries attached.
+(`feat:`, `fix:`, `docs:`, `chore:`, …).
+
+Releases are cut manually: bump both crate versions, commit, tag, push.
 
 - Untagged pushes/PRs: `build.yml` runs fmt, tests, and uploads
   `kodi-rpc-<sha>-<platform>` snapshot artifacts.

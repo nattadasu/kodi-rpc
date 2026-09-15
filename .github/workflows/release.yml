@@ -1,9 +1,9 @@
 name: Release
 
-# Tagged release: pushing a tag (manually, or automatically by release-please
-# when its version PR merges) builds all six binaries and publishes them to
-# the GitHub release. Tags with a `-` suffix (e.g. `v0.2.0-beta.1`) publish
-# as prereleases; plain `vX.Y.Z` tags publish as stable.
+# Tagged release: pushing a tag manually builds all six binaries and
+# publishes them to the GitHub release. Tags with a `-` suffix
+# (e.g. `v0.2.0-beta.1`) publish as prereleases; plain `vX.Y.Z` tags
+# publish as stable.
 on:
   push:
     tags:
