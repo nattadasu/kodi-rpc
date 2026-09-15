@@ -486,7 +486,7 @@ pub fn info_urls(kind: &str, details: &ArtHolder) -> Vec<ExternalUrl> {
     }
     if let Some(url) = tvdb_url(kind, details) {
         urls.push(ExternalUrl {
-            name: "The TV DB".to_string(),
+            name: "The TVDB".to_string(),
             url,
         });
     }
@@ -1378,7 +1378,7 @@ mod kodi_tests {
         assert_eq!(urls.len(), 4);
         assert_eq!(urls[0].name, "The Movie DB");
         assert_eq!(urls[0].url, "https://www.themoviedb.org/tv/312849");
-        assert_eq!(urls[1].name, "The TV DB");
+        assert_eq!(urls[1].name, "The TVDB");
         assert_eq!(
             urls[1].url,
             "https://thetvdb.com/dereferrer/series/400123"
