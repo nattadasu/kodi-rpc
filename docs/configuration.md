@@ -321,7 +321,7 @@ If you don't specify custom line text, Kodi-RPC uses these defaults for each med
 
 Unrecognized template variables are displayed as normal text. Any duplicate or leftover `{sep}` separators are cleaned up automatically.
 
-Up to 2 buttons are displayed per activity. Buttons with `{"name": "dynamic", "url": "dynamic"}` automatically link to TMDB pages or trailers when available. Button labels are capped at 32 characters, and URLs over 512 characters are omitted.
+Up to 2 buttons are displayed per activity. Buttons with `{"name": "dynamic", "url": "dynamic"}` automatically link to the trailer plus info pages in TMDB → TVDB → WeTrakr (`https://wetrakr.com/tmdb/movies/{id}` for movies, `https://wetrakr.com/tmdb/shows/{id}` for TV) → IMDb order, so a missing trailer still leaves both slots filled (e.g. TMDB + TVDB, or TMDB + WeTrakr when no TVDB id is scraped). Button labels are capped at 32 characters, and URLs over 512 characters are omitted.
 
 ### Template Placeholders Reference
 

@@ -80,7 +80,7 @@ struct FetchedSession {
 #[derive(Clone, Default)]
 struct CachedArt {
     poster: Option<String>,
-    info_url: Option<String>,
+    info_urls: Vec<kodi::ExternalUrl>,
     trailer_url: Option<String>,
 }
 
@@ -499,23 +499,26 @@ impl Client {
                 if source == PosterSource::Series {
                     if let Some(details) = self.fetch_tvshow_details(inst_idx, tvshowid) {
                         art.poster = pick_art_poster(&details.art);
-                        art.info_url = kodi::info_url("tv", &details);
+                        art.info_urls = kodi::info_urls("tv", &details);
                     }
                 } else if let Some(details) = self.fetch_tvshow_details(inst_idx, tvshowid) {
                     art.poster = self
                         .fetch_season_poster(inst_idx, tvshowid, season)
                         .or_else(|| pick_art_poster(&details.art));
-                    art.info_url = kodi::info_url("tv", &details);
+                    art.info_urls = kodi::info_urls("tv", &details);
                 } else {
                     art.poster = self.fetch_season_poster(inst_idx, tvshowid, season);
                 }
                 debug!(
-                    "Art for tvshow {} season {} ({:?}): poster={}, info={}",
+                    "Art for tvshow {} season {} ({:?}): poster={}, info={:?}",
                     tvshowid,
                     season,
                     source,
                     art.poster.as_deref().unwrap_or("<none>"),
-                    art.info_url.as_deref().unwrap_or("<none>"),
+                    art.info_urls
+                        .iter()
+                        .map(|e| e.url.as_str())
+                        .collect::<Vec<_>>(),
                 );
                 self.poster_cache.insert(cache_key, art.clone());
                 Self::apply_art(npi, &art);
@@ -532,7 +535,7 @@ impl Client {
                 let mut art = CachedArt::default();
                 if let Some(details) = self.fetch_movie_details(inst_idx, movieid) {
                     art.poster = pick_art_poster(&details.art);
-                    art.info_url = kodi::info_url("movie", &details);
+                    art.info_urls = kodi::info_urls("movie", &details);
                     art.trailer_url = details
                         .trailer
                         .clone()
@@ -540,10 +543,13 @@ impl Client {
                         .filter(|t| !kodi::is_loopback_url(t));
                 }
                 debug!(
-                    "Art for movie {}: poster={}, info={}, trailer={}",
+                    "Art for movie {}: poster={}, info={:?}, trailer={}",
                     movieid,
                     art.poster.as_deref().unwrap_or("<none>"),
-                    art.info_url.as_deref().unwrap_or("<none>"),
+                    art.info_urls
+                        .iter()
+                        .map(|e| e.url.as_str())
+                        .collect::<Vec<_>>(),
                     art.trailer_url.as_deref().unwrap_or("<none>"),
                 );
                 self.poster_cache.insert(cache_key, art.clone());
@@ -679,8 +685,6 @@ impl Client {
         Some(res.files)
     }
 
-    /// Dynamic buttons come from series/movie info (TMDB link, trailer) —
-    /// never from episode-level IDs or playback file URLs.
     fn apply_art(npi: &mut NowPlayingItem, art: &CachedArt) {
         npi.poster = art.poster.clone();
         let mut urls = Vec::new();
@@ -690,10 +694,10 @@ impl Client {
                 url: trailer,
             });
         }
-        if let Some(info) = art.info_url.clone() {
+        for info in &art.info_urls {
             urls.push(kodi::ExternalUrl {
-                name: "TMDB".to_string(),
-                url: info,
+                name: info.name.clone(),
+                url: info.url.clone(),
             });
         }
         npi.external_urls = if urls.is_empty() { None } else { Some(urls) };

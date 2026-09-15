@@ -409,18 +409,63 @@ fn id_string(value: Option<&serde_json::Value>) -> Option<String> {
     }
 }
 
-/// TMDB/IMDb link from `uniqueid` only (episode-level IDs are unreliable).
-/// `kind` is `"tv"` or `"movie"`.
-pub fn info_url(kind: &str, details: &ArtHolder) -> Option<String> {
-    if let Some(tmdb) = id_string(details.uniqueid.get("tmdb")) {
-        return Some(format!("https://www.themoviedb.org/{kind}/{tmdb}"));
+pub fn tmdb_id(details: &ArtHolder) -> Option<String> {
+    id_string(details.uniqueid.get("tmdb"))
+}
+
+pub fn tvdb_id(details: &ArtHolder) -> Option<String> {
+    id_string(details.uniqueid.get("tvdb"))
+}
+
+pub fn tvdb_url(kind: &str, details: &ArtHolder) -> Option<String> {
+    let tvdb = tvdb_id(details)?;
+    let segment = match kind {
+        "tv" => "series",
+        "movie" => "movie",
+        _ => return None,
+    };
+    Some(format!("https://thetvdb.com/dereferrer/{segment}/{tvdb}"))
+}
+
+pub fn wetrakr_url(kind: &str, details: &ArtHolder) -> Option<String> {
+    let tmdb = tmdb_id(details)?;
+    let segment = match kind {
+        "tv" => "shows",
+        "movie" => "movies",
+        _ => return None,
+    };
+    Some(format!("https://wetrakr.com/tmdb/{segment}/{tmdb}"))
+}
+
+pub fn info_urls(kind: &str, details: &ArtHolder) -> Vec<ExternalUrl> {
+    let mut urls = Vec::new();
+    if let Some(tmdb) = tmdb_id(details) {
+        urls.push(ExternalUrl {
+            name: "The Movie DB".to_string(),
+            url: format!("https://www.themoviedb.org/{kind}/{tmdb}"),
+        });
+    }
+    if let Some(url) = tvdb_url(kind, details) {
+        urls.push(ExternalUrl {
+            name: "The TV DB".to_string(),
+            url,
+        });
+    }
+    if let Some(url) = wetrakr_url(kind, details) {
+        urls.push(ExternalUrl {
+            name: "WeTrakr".to_string(),
+            url,
+        });
     }
     if let Some(imdb) = id_string(details.uniqueid.get("imdb")) {
         if imdb.starts_with("tt") {
-            return Some(format!("https://www.imdb.com/title/{imdb}/"));
+            urls.push(ExternalUrl {
+                name: "IMDb".to_string(),
+                url: format!("https://www.imdb.com/title/{imdb}/"),
+            });
         }
     }
-    None
+    urls
 }
 
 /// Pick the `poster` entry out of an `art` dict. Blank entries don't count.
@@ -687,12 +732,12 @@ impl NowPlayingItem {
         let external_urls = if crate::crunchyroll::is_crunchyroll_addon(addon_id.as_deref()) {
             crate::crunchyroll::playback_ids(&file).map(|ids| {
                 let mut urls = vec![ExternalUrl {
-                    name: "Watch".to_string(),
+                    name: "Watch Episode".to_string(),
                     url: crate::crunchyroll::watch_url(&ids.episode),
                 }];
                 if let Some(series) = ids.series {
                     urls.push(ExternalUrl {
-                        name: "Series".to_string(),
+                        name: "View Series Info".to_string(),
                         url: crate::crunchyroll::series_url(&series),
                     });
                 }
@@ -1148,27 +1193,75 @@ mod kodi_tests {
             .collect(),
             trailer: None,
         };
+        let first = |kind: &str, d: &ArtHolder| {
+            info_urls(kind, d).into_iter().next().map(|e| e.url)
+        };
         // Numeric tmdb tolerated; series vs movie paths differ.
         let d = holder(Some(Value::from(312849)), Some("tt41278600"));
         assert_eq!(
-            info_url("tv", &d).as_deref(),
+            first("tv", &d).as_deref(),
             Some("https://www.themoviedb.org/tv/312849")
         );
         assert_eq!(
-            info_url("movie", &d).as_deref(),
+            first("movie", &d).as_deref(),
             Some("https://www.themoviedb.org/movie/312849")
         );
         // No tmdb -> tt-prefixed imdb wins.
         let d = holder(None, Some("tt41278600"));
         assert_eq!(
-            info_url("tv", &d).as_deref(),
+            first("tv", &d).as_deref(),
             Some("https://www.imdb.com/title/tt41278600/")
         );
         // Garbage everywhere -> no link (never a broken button).
         let d = holder(None, Some(""));
-        assert_eq!(info_url("tv", &d), None);
+        assert_eq!(first("tv", &d), None);
         let d = holder(None, None);
-        assert_eq!(info_url("movie", &d), None);
+        assert_eq!(first("movie", &d), None);
+    }
+
+    #[test]
+    fn info_urls_tmdb_tvdb_wetrakr_order() {
+        use serde_json::Value;
+        use std::collections::HashMap;
+        let holder = ArtHolder {
+            art: HashMap::new(),
+            uniqueid: [
+                ("tmdb".to_string(), Value::from(312849)),
+                ("tvdb".to_string(), Value::from(400123)),
+                ("imdb".to_string(), Value::from("tt41278600")),
+            ]
+            .into_iter()
+            .collect(),
+            trailer: None,
+        };
+        let urls = info_urls("tv", &holder);
+        assert_eq!(urls.len(), 4);
+        assert_eq!(urls[0].name, "The Movie DB");
+        assert_eq!(urls[0].url, "https://www.themoviedb.org/tv/312849");
+        assert_eq!(urls[1].name, "The TV DB");
+        assert_eq!(
+            urls[1].url,
+            "https://thetvdb.com/dereferrer/series/400123"
+        );
+        assert_eq!(urls[2].name, "WeTrakr");
+        assert_eq!(urls[2].url, "https://wetrakr.com/tmdb/shows/312849");
+        assert_eq!(urls[3].name, "IMDb");
+
+        let urls = info_urls("movie", &holder);
+        assert_eq!(urls[1].url, "https://thetvdb.com/dereferrer/movie/400123");
+        assert_eq!(urls[2].url, "https://wetrakr.com/tmdb/movies/312849");
+
+        let holder = ArtHolder {
+            art: HashMap::new(),
+            uniqueid: [("tmdb".to_string(), Value::from(550))]
+                .into_iter()
+                .collect(),
+            trailer: None,
+        };
+        let urls = info_urls("movie", &holder);
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[0].url, "https://www.themoviedb.org/movie/550");
+        assert_eq!(urls[1].url, "https://wetrakr.com/tmdb/movies/550");
     }
 
     #[test]
@@ -1259,12 +1352,12 @@ mod kodi_tests {
         assert_eq!(npi.name, "An Unexpected Gift");
         let buttons = npi.external_urls.as_ref().expect("crunchy buttons");
         assert_eq!(buttons.len(), 2);
-        assert_eq!(buttons[0].name, "Watch");
+        assert_eq!(buttons[0].name, "Watch Episode");
         assert_eq!(
             buttons[0].url,
             "https://www.crunchyroll.com/watch/GE00378555JAJP"
         );
-        assert_eq!(buttons[1].name, "Series");
+        assert_eq!(buttons[1].name, "View Series Info");
         assert_eq!(
             buttons[1].url,
             "https://www.crunchyroll.com/series/GT00378118"
