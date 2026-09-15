@@ -10,7 +10,12 @@ pub fn checker() {
         return;
     }
     let current = VERSION.unwrap_or("0.0.0").to_string();
-    let latest = get_latest_github().unwrap_or(current.clone());
+    // Tags carry a `v` prefix (`v1.1.0`) while the package version is bare
+    // (`1.1.0`); compare and display the trimmed form on both sides.
+    let latest = get_latest_github()
+        .unwrap_or(current.clone())
+        .trim_start_matches('v')
+        .to_string();
     if latest != current {
         warn!(
             "{} (Current: v{}, Latest: v{})",
