@@ -417,6 +417,14 @@ pub fn tvdb_id(details: &ArtHolder) -> Option<String> {
     id_string(details.uniqueid.get("tvdb"))
 }
 
+pub fn imdb_id(details: &ArtHolder) -> Option<String> {
+    let imdb = id_string(details.uniqueid.get("imdb"))?;
+    if imdb.starts_with("tt") {
+        Some(imdb)
+    } else {
+        None
+    }
+}
 pub fn tvdb_url(kind: &str, details: &ArtHolder) -> Option<String> {
     let tvdb = tvdb_id(details)?;
     let segment = match kind {
@@ -457,13 +465,11 @@ pub fn info_urls(kind: &str, details: &ArtHolder) -> Vec<ExternalUrl> {
             url,
         });
     }
-    if let Some(imdb) = id_string(details.uniqueid.get("imdb")) {
-        if imdb.starts_with("tt") {
-            urls.push(ExternalUrl {
-                name: "IMDb".to_string(),
-                url: format!("https://www.imdb.com/title/{imdb}/"),
-            });
-        }
+    if let Some(imdb) = imdb_id(details) {
+        urls.push(ExternalUrl {
+            name: "IMDb".to_string(),
+            url: format!("https://www.imdb.com/title/{imdb}/"),
+        });
     }
     urls
 }
@@ -623,6 +629,10 @@ pub struct NowPlayingItem {
     pub poster: Option<String>,
     pub plot: Option<String>,
     pub player_kind: String,
+    pub tmdb_id: Option<String>,
+    pub tvdb_id: Option<String>,
+    pub imdb_id: Option<String>,
+    pub trailer_url: Option<String>,
 }
 
 impl NowPlayingItem {
@@ -788,6 +798,10 @@ impl NowPlayingItem {
             poster: None,
             plot: item.plot.clone().filter(|p| !p.is_empty()),
             player_kind: player_kind.to_string(),
+            tmdb_id: None,
+            tvdb_id: None,
+            imdb_id: None,
+            trailer_url: None,
         })
     }
 

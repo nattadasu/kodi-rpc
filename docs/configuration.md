@@ -296,7 +296,7 @@ The `display` object format accepts the following fields:
 | `status_display_type` | `enum["name", "state", "details"]` | No | `"name"` | Controls member list status text on Discord: `"name"` (app name), `"state"`, or `"details"`. |
 | `poster_source` | `enum["season", "series", "episode", "still"]` | No | `"season"` | Episode artwork source: `"season"` (season poster, then series), `"series"` (series poster only), or `"episode"` / `"still"` (episode screenshot). |
 | `show_paused` | `boolean` | No | [`discord.show_paused`](#discord) | Show presence for this section while paused. Uses [`discord.show_paused`](#discord) if omitted. |
-| `buttons` | `arr[object]` | No | [`discord.buttons`](#discord) | Custom buttons for this section (`{ "name": "...", "url": "..." }`). Uses [`discord.buttons`](#discord) if omitted; `[]` hides all buttons. |
+| `buttons` | `arr[object]` | No | [`discord.buttons`](#discord) | Custom buttons for this section (`{ "name": "...", "url": "..." }`, templates supported — see [Button Templates](#button-templates)). Uses [`discord.buttons`](#discord) if omitted; `[]` hides all buttons. |
 
 ### Default Line Formats
 
@@ -321,7 +321,56 @@ If you don't specify custom line text, Kodi-RPC uses these defaults for each med
 
 Unrecognized template variables are displayed as normal text. Any duplicate or leftover `{sep}` separators are cleaned up automatically.
 
-Up to 2 buttons are displayed per activity. Buttons with `{"name": "dynamic", "url": "dynamic"}` automatically link to the trailer plus info pages in TMDB → TVDB → WeTrakr (`https://wetrakr.com/tmdb/movies/{id}` for movies, `https://wetrakr.com/tmdb/shows/{id}` for TV) → IMDb order, so a missing trailer still leaves both slots filled (e.g. TMDB + TVDB, or TMDB + WeTrakr when no TVDB id is scraped). Button labels are capped at 32 characters, and URLs over 512 characters are omitted.
+Up to 2 buttons per activity. `{"name": "dynamic", "url": "dynamic"}` links to the trailer and info pages (TMDB, TVDB, WeTrakr, IMDb). Labels cap at 32 characters, URLs over 512 characters are dropped.
+
+### Button Templates
+
+Custom (non-`dynamic`) buttons accept the same `{placeholders}` as their section's display templates, in both `name` and `url` (see [Template Placeholders Reference](#template-placeholders-reference)):
+
+```json
+"movies": {
+    "buttons": [
+        { "name": "dynamic", "url": "dynamic" },
+        { "name": "Search {title} Trailer", "url": "https://www.youtube.com/results?search_query={title}+{year}+trailer" }
+    ]
+}
+```
+
+Example: watching `Blade Runner 2049 (2017)` → name `Search Blade Runner 2049 Trailer`, url `https://www.youtube.com/results?search_query=Blade%20Runner%202049+2017+trailer`
+
+```json
+"episodes": {
+    "buttons": [
+        { "name": "dynamic", "url": "dynamic" },
+        { "name": "{show-title} S{season-padded}E{episode-padded}", "url": "https://example.com/search?q={show-title}+{title}" }
+    ]
+}
+```
+
+#### Button-only placeholders
+
+Available in every section:
+
+| Placeholder | Example Output |
+| :--- | :--- |
+| `{tmdb}` | `550` |
+| `{tvdb}` | `400123` |
+| `{imdb}` | `tt0120338` |
+| `{trailer}` | Trailer URL from the library |
+
+Example: `{ "name": "WeTrakr", "url": "https://wetrakr.com/tmdb/movies/{tmdb}" }` → `https://wetrakr.com/tmdb/movies/550`
+
+Example: `{ "name": "Watch Trailer", "url": "{trailer}" }` → trailer button with a custom label.
+
+
+#### Rendering rules
+
+| Rule | Description |
+| :--- | :--- |
+| `url` encoding | Values are percent-encoded, except `{trailer}` which is already a URL. |
+| `name` rendering | Values are substituted raw, like display templates. |
+| Hidden buttons | A button is hidden when a `url` placeholder is empty, its `name` is empty, or the `url` is not valid `http(s)`. |
+| Plain buttons | Buttons without placeholders are unchanged. |
 
 ### Template Placeholders Reference
 

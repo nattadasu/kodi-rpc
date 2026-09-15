@@ -82,6 +82,9 @@ struct CachedArt {
     poster: Option<String>,
     info_urls: Vec<kodi::ExternalUrl>,
     trailer_url: Option<String>,
+    tmdb_id: Option<String>,
+    tvdb_id: Option<String>,
+    imdb_id: Option<String>,
 }
 
 /// Crunchyroll series cache (see [`crunchyroll::CrunchySeriesEntry`]).
@@ -500,12 +503,18 @@ impl Client {
                     if let Some(details) = self.fetch_tvshow_details(inst_idx, tvshowid) {
                         art.poster = pick_art_poster(&details.art);
                         art.info_urls = kodi::info_urls("tv", &details);
+                        art.tmdb_id = kodi::tmdb_id(&details);
+                        art.tvdb_id = kodi::tvdb_id(&details);
+                        art.imdb_id = kodi::imdb_id(&details);
                     }
                 } else if let Some(details) = self.fetch_tvshow_details(inst_idx, tvshowid) {
                     art.poster = self
                         .fetch_season_poster(inst_idx, tvshowid, season)
                         .or_else(|| pick_art_poster(&details.art));
                     art.info_urls = kodi::info_urls("tv", &details);
+                    art.tmdb_id = kodi::tmdb_id(&details);
+                    art.tvdb_id = kodi::tvdb_id(&details);
+                    art.imdb_id = kodi::imdb_id(&details);
                 } else {
                     art.poster = self.fetch_season_poster(inst_idx, tvshowid, season);
                 }
@@ -536,6 +545,9 @@ impl Client {
                 if let Some(details) = self.fetch_movie_details(inst_idx, movieid) {
                     art.poster = pick_art_poster(&details.art);
                     art.info_urls = kodi::info_urls("movie", &details);
+                    art.tmdb_id = kodi::tmdb_id(&details);
+                    art.tvdb_id = kodi::tvdb_id(&details);
+                    art.imdb_id = kodi::imdb_id(&details);
                     art.trailer_url = details
                         .trailer
                         .clone()
@@ -687,6 +699,10 @@ impl Client {
 
     fn apply_art(npi: &mut NowPlayingItem, art: &CachedArt) {
         npi.poster = art.poster.clone();
+        npi.tmdb_id = art.tmdb_id.clone();
+        npi.tvdb_id = art.tvdb_id.clone();
+        npi.imdb_id = art.imdb_id.clone();
+        npi.trailer_url = art.trailer_url.clone();
         let mut urls = Vec::new();
         if let Some(trailer) = art.trailer_url.clone() {
             urls.push(kodi::ExternalUrl {
@@ -778,6 +794,159 @@ impl Client {
         }
     }
 
+    fn button_template_values(&self) -> Vec<(String, String)> {
+        let session = self.session.as_ref().unwrap();
+        let item = &session.now_playing_item;
+        let mut values: Vec<(String, String)> = Vec::new();
+        match item.media_type {
+            MediaType::Music => {
+                values.push(("{track}".to_string(), item.name.clone()));
+                values.push((
+                    "{album}".to_string(),
+                    item.album.clone().unwrap_or_default(),
+                ));
+                values.push(("{artists}".to_string(), session.format_artists()));
+            }
+            MediaType::Movie => {
+                values.push(("{title}".to_string(), item.name.clone()));
+                values.push((
+                    "{original-title}".to_string(),
+                    item.original_title.clone().unwrap_or_default(),
+                ));
+                values.push((
+                    "{critic-score}".to_string(),
+                    item.critic_rating
+                        .map(|s| format!("🍅 {}/100", s))
+                        .unwrap_or_default(),
+                ));
+                values.push((
+                    "{community-score}".to_string(),
+                    item.community_rating
+                        .map(|s| format!("⭐ {:.1}/10", s))
+                        .unwrap_or_default(),
+                ));
+            }
+            MediaType::Episode => {
+                values.push((
+                    "{show-title}".to_string(),
+                    item.series_name.clone().unwrap_or_default(),
+                ));
+                values.push(("{title}".to_string(), item.name.clone()));
+                values.push((
+                    "{original-title}".to_string(),
+                    item.original_title.clone().unwrap_or_default(),
+                ));
+                let episode = item.index_number.unwrap_or(0);
+                let season = item.parent_index_number.unwrap_or(0);
+                values.push(("{episode}".to_string(), episode.to_string()));
+                values.push(("{episode-padded}".to_string(), format!("{:02}", episode)));
+                values.push(("{season}".to_string(), season.to_string()));
+                values.push(("{season-padded}".to_string(), format!("{:02}", season)));
+                values.push((
+                    "{studio}".to_string(),
+                    item.series_studio.clone().unwrap_or_default(),
+                ));
+            }
+            _ => {
+                values.push(("{title}".to_string(), item.name.clone()));
+                values.push(("{label}".to_string(), item.label.clone()));
+                values.push((
+                    "{addon}".to_string(),
+                    item.addon_id
+                        .as_ref()
+                        .map(|a| a.rsplit('.').next().unwrap_or(a).to_string())
+                        .unwrap_or_default(),
+                ));
+                values.push((
+                    "{addon-full}".to_string(),
+                    item.addon_id.clone().unwrap_or_default(),
+                ));
+                values.push(("{file-host}".to_string(), item.file_host_display()));
+                values.push((
+                    "{studio}".to_string(),
+                    item.series_studio.clone().unwrap_or_default(),
+                ));
+                values.push(("{plot}".to_string(), item.plot.clone().unwrap_or_default()));
+            }
+        }
+        values.push((
+            "{genres}".to_string(),
+            item.genres
+                .as_ref()
+                .unwrap_or(&vec!["".to_string()])
+                .join(", "),
+        ));
+        values.push((
+            "{year}".to_string(),
+            item.production_year
+                .map(|y| y.to_string())
+                .unwrap_or_default(),
+        ));
+        values.push(("{tmdb}".to_string(), item.tmdb_id.clone().unwrap_or_default()));
+        values.push(("{tvdb}".to_string(), item.tvdb_id.clone().unwrap_or_default()));
+        values.push(("{imdb}".to_string(), item.imdb_id.clone().unwrap_or_default()));
+        values.push((
+            "{trailer}".to_string(),
+            item.trailer_url.clone().unwrap_or_default(),
+        ));
+        values.push((
+            "{version}".to_string(),
+            VERSION.unwrap_or("UNKNOWN").to_string(),
+        ));
+        values.push((
+            "{sep}".to_string(),
+            self.display_options(item.media_type).separator.clone(),
+        ));
+        values
+    }
+
+    fn is_usable_button_url(url: &str) -> bool {
+        if url.chars().count() > MAX_BUTTON_URL_LEN {
+            return false;
+        }
+        let parsed = match Url::parse(url) {
+            Ok(u) => u,
+            Err(_) => return false,
+        };
+        if parsed.scheme() != "http" && parsed.scheme() != "https" {
+            return false;
+        }
+        !kodi::is_loopback_url(url)
+    }
+
+    fn render_custom_button(&self, button: &Button) -> Option<Button> {
+        let mut values = self.button_template_values();
+        values.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        let mut name = button.name.clone();
+        let mut url = button.url.clone();
+        let mut missing = false;
+        for (key, raw) in &values {
+            if name.contains(key) {
+                name = name.replace(key, raw);
+            }
+            if url.contains(key) {
+                if raw.is_empty() {
+                    missing = true;
+                }
+                if key == "{trailer}" {
+                    url = url.replace(key, raw);
+                } else {
+                    url = url.replace(key, &urlencoding::encode(raw));
+                }
+            }
+        }
+        if missing {
+            return None;
+        }
+        if name.trim().is_empty() {
+            return None;
+        }
+        if !Self::is_usable_button_url(&url) {
+            return None;
+        }
+        Some(Button::new(name, url))
+    }
+
     fn get_buttons(&self) -> Option<Vec<Button>> {
         let session = self.session.as_ref()?;
         let conf_buttons = &self
@@ -808,8 +977,8 @@ impl Client {
                         ));
                         i += 1;
                     }
-                } else {
-                    activity_buttons.push(button.clone())
+                } else if let Some(rendered) = self.render_custom_button(button) {
+                    activity_buttons.push(rendered)
                 }
             }
             return Some(Self::usable_buttons(activity_buttons));
@@ -820,7 +989,9 @@ impl Client {
                 }
 
                 if !button.is_dynamic() {
-                    activity_buttons.push(button.clone())
+                    if let Some(rendered) = self.render_custom_button(button) {
+                        activity_buttons.push(rendered)
+                    }
                 }
             }
             return Some(Self::usable_buttons(activity_buttons));

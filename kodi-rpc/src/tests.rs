@@ -167,6 +167,128 @@ fn client_for(url: &str, user: &str, pass: &str) -> Client {
     b.build().expect("client builds")
 }
 
+fn movie_session(name: &str, year: Option<i32>, tmdb: Option<&str>) -> Session {
+    let item = KodiItem {
+        label: name.to_string(),
+        item_type: "movie".to_string(),
+        title: Some(name.to_string()),
+        year,
+        file: Some("/videos/movie.mkv".to_string()),
+        ..Default::default()
+    };
+    let props = fake_props();
+    let mut npi = NowPlayingItem::from_kodi(&item, &props, "video").expect("parses");
+    if let Some(t) = tmdb {
+        npi.tmdb_id = Some(t.to_string());
+    }
+    Session {
+        item_id: npi.id.clone(),
+        play_state: PlayState::from_props(&props),
+        now_playing_item: npi,
+        source: 0,
+    }
+}
+
+fn episode_session(show: &str, title: &str, season: i32, episode: i32) -> Session {
+    let item = KodiItem {
+        label: format!("{show} - S{season:02}E{episode:02} - {title}"),
+        item_type: "episode".to_string(),
+        title: Some(title.to_string()),
+        showtitle: Some(show.to_string()),
+        season: Some(season),
+        episode: Some(episode),
+        file: Some("/videos/show.mkv".to_string()),
+        ..Default::default()
+    };
+    let props = fake_props();
+    let npi = NowPlayingItem::from_kodi(&item, &props, "video").expect("parses");
+    Session {
+        item_id: npi.id.clone(),
+        play_state: PlayState::from_props(&props),
+        now_playing_item: npi,
+        source: 0,
+    }
+}
+
+#[test]
+fn custom_button_templates_render() {
+    let mut b = ClientBuilder::new();
+    b.url("http://localhost:8080").movies_buttons(vec![Button::new(
+        "Search {title} Trailer".to_string(),
+        "https://www.youtube.com/results?search_query={title}+{year}+trailer".to_string(),
+    )]);
+    let mut c = b.build().unwrap();
+    c.session = Some(movie_session("Blade Runner 2049", Some(2017), None));
+    let btns = c.get_buttons().unwrap();
+    assert_eq!(btns.len(), 1);
+    assert_eq!(btns[0].name, "Search Blade Runner 2049 Trailer");
+    assert_eq!(
+        btns[0].url,
+        "https://www.youtube.com/results?search_query=Blade%20Runner%202049+2017+trailer"
+    );
+}
+
+#[test]
+fn custom_button_missing_id_dropped() {
+    let mut b = ClientBuilder::new();
+    b.url("http://localhost:8080").movies_buttons(vec![Button::new(
+        "WeTrakr".to_string(),
+        "https://wetrakr.com/tmdb/movies/{tmdb}".to_string(),
+    )]);
+    let mut c = b.build().unwrap();
+    c.session = Some(movie_session("Some Title", None, None));
+    assert!(c.get_buttons().unwrap().is_empty());
+
+    c.session = Some(movie_session("Some Title", None, Some("550")));
+    let btns = c.get_buttons().unwrap();
+    assert_eq!(btns.len(), 1);
+    assert_eq!(btns[0].url, "https://wetrakr.com/tmdb/movies/550");
+}
+
+#[test]
+fn custom_button_episode_templates() {
+    let mut b = ClientBuilder::new();
+    b.url("http://localhost:8080").episodes_buttons(vec![Button::new(
+        "{show-title} S{season-padded}E{episode-padded}".to_string(),
+        "https://example.com/search?q={show-title}+{title}".to_string(),
+    )]);
+    let mut c = b.build().unwrap();
+    c.session = Some(episode_session("My Show", "Pilot Episode", 1, 7));
+    let btns = c.get_buttons().unwrap();
+    assert_eq!(btns.len(), 1);
+    assert_eq!(btns[0].name, "My Show S01E07");
+    assert_eq!(btns[0].url, "https://example.com/search?q=My%20Show+Pilot%20Episode");
+}
+
+#[test]
+fn plain_custom_button_unchanged() {
+    let mut b = ClientBuilder::new();
+    b.url("http://localhost:8080").movies_buttons(vec![Button::new(
+        "Donate".to_string(),
+        "https://example.com/donate".to_string(),
+    )]);
+    let mut c = b.build().unwrap();
+    c.session = Some(movie_session("Some Title", None, None));
+    let btns = c.get_buttons().unwrap();
+    assert_eq!(btns.len(), 1);
+    assert_eq!(btns[0].name, "Donate");
+    assert_eq!(btns[0].url, "https://example.com/donate");
+}
+
+#[test]
+fn custom_button_bad_url_dropped() {
+    let mut b = ClientBuilder::new();
+    b.url("http://localhost:8080").movies_buttons(vec![
+        Button::new("bad".to_string(), "not a url".to_string()),
+        Button::new("ok".to_string(), "https://example.com/".to_string()),
+    ]);
+    let mut c = b.build().unwrap();
+    c.session = Some(movie_session("Some Title", None, None));
+    let btns = c.get_buttons().unwrap();
+    assert_eq!(btns.len(), 1);
+    assert_eq!(btns[0].name, "ok");
+}
+
 /// Regression test: `http://localhost:8080/image/...` URLs killed presence
 /// rendering, so local `image://` art must fall back to the default icon.
 #[test]
