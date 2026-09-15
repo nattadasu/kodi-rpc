@@ -90,6 +90,17 @@ fn live_kodi_session_parses() {
             .as_deref()
             .unwrap_or("<none>")
     );
+    println!(
+        "plot       : {}",
+        session
+            .now_playing_item
+            .plot
+            .as_deref()
+            .unwrap_or("<none>")
+            .chars()
+            .take(80)
+            .collect::<String>()
+    );
     println!("details    : {}", client.get_details());
     println!("state      : {}", client.get_state());
     println!("image_text : {}", client.get_image_text());

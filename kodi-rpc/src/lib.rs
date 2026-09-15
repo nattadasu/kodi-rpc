@@ -1,3 +1,4 @@
+use crunchyroll::CrunchySeriesEntry;
 use discord_rich_presence::activity::{
     ActivityType, Button as ActButton, StatusDisplayType as DiscordIpcStatusDisplayType,
 };
@@ -19,6 +20,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use url::Url;
 
+pub(crate) mod crunchyroll;
 mod error;
 mod external;
 mod kodi;
@@ -82,6 +84,7 @@ struct CachedArt {
     trailer_url: Option<String>,
 }
 
+/// Crunchyroll series cache (see [`crunchyroll::CrunchySeriesEntry`]).
 /// Client used to interact with Kodi and Discord
 pub struct Client {
     discord_ipc_client: DiscordIpcClient,
@@ -102,6 +105,8 @@ pub struct Client {
     large_image_text: String,
     /// Poster lookups per show/season/movie; avoids an extra RPC per poll.
     poster_cache: HashMap<String, CachedArt>,
+    /// Crunchyroll series lookups, same zero-per-poll goal.
+    crunchy_cache: HashMap<String, CrunchySeriesEntry>,
 }
 
 use kodi::Session;
@@ -460,6 +465,12 @@ impl Client {
     ) {
         match npi.media_type {
             MediaType::Episode => {
+                // Crunchyroll has no library tvshowid; use its directory listing.
+                if tvshowid.is_none() && crunchyroll::is_crunchyroll_addon(npi.addon_id.as_deref())
+                {
+                    self.populate_crunchyroll(npi, inst_idx, source);
+                    return;
+                }
                 if source == PosterSource::Episode {
                     return;
                 }
@@ -527,6 +538,132 @@ impl Client {
             }
             _ => {}
         }
+    }
+
+    /// Crunchyroll `poster` (+ missing episode `plot`) from directory
+    /// listings. Hits cost 0 RPCs, misses at most 2; entries live for
+    /// [`crunchyroll::CACHE_TTL`], failures negative-cached alike.
+    fn populate_crunchyroll(
+        &mut self,
+        npi: &mut NowPlayingItem,
+        inst_idx: usize,
+        source: PosterSource,
+    ) {
+        let Some(series_id) = crunchyroll::series_id_from_file(&npi.file) else {
+            return;
+        };
+        let cache_key = format!("{}:crunchy:{}", inst_idx, series_id);
+        if let Some(entry) = self.crunchy_cache.get(&cache_key) {
+            if entry.is_fresh() {
+                Self::apply_crunchy_entry(npi, entry, source);
+                return;
+            }
+            debug!(
+                "Crunchyroll cache expired for series {} (ttl {:?}), refetching",
+                series_id,
+                crunchyroll::CACHE_TTL
+            );
+        }
+        let mut entry = CrunchySeriesEntry::default();
+        if let Some(seasons) =
+            self.fetch_crunchy_directory(inst_idx, &crunchyroll::series_directory(&series_id))
+        {
+            for s in &seasons {
+                if entry.poster.is_none() {
+                    if let Some(poster) = pick_art_poster(&s.art) {
+                        entry.poster = Some(poster);
+                    }
+                }
+                if entry.fanart.is_none() {
+                    if let Some(f) = s.fanart.clone().filter(|f| !f.is_empty()) {
+                        entry.fanart = Some(f);
+                    }
+                }
+                if let Some(num) = s.season.filter(|v| *v >= 0) {
+                    if let Some(season_id) = s.file.rsplit('/').next().filter(|v| !v.is_empty()) {
+                        entry.seasons.entry(num).or_insert(season_id.to_string());
+                    }
+                }
+            }
+            if let Some(season_id) = npi
+                .parent_index_number
+                .and_then(|n| entry.season_id(n).map(str::to_string))
+            {
+                if let Some(episodes) = self.fetch_crunchy_directory(
+                    inst_idx,
+                    &crunchyroll::season_directory(&series_id, &season_id),
+                ) {
+                    for e in &episodes {
+                        if entry.poster.is_none() {
+                            if let Some(poster) = pick_art_poster(&e.art) {
+                                entry.poster = Some(poster);
+                            }
+                        }
+                        if let Some(plot) = e.plot.clone().filter(|p| !p.trim().is_empty()) {
+                            if !e.file.is_empty() {
+                                entry.episode_plots.entry(e.file.clone()).or_insert(plot);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        debug!(
+            "Crunchyroll art for series {}: poster={}, seasons={}, plots={}",
+            series_id,
+            entry.poster.as_deref().unwrap_or("<none>"),
+            entry.seasons.len(),
+            entry.episode_plots.len(),
+        );
+        // Cache even empty misses so failures don't cost RPCs every poll.
+        self.crunchy_cache.insert(cache_key.clone(), entry.clone());
+        if let Some(entry) = self.crunchy_cache.get(&cache_key) {
+            Self::apply_crunchy_entry(npi, entry, source);
+        }
+    }
+
+    fn apply_crunchy_entry(
+        npi: &mut NowPlayingItem,
+        entry: &CrunchySeriesEntry,
+        source: PosterSource,
+    ) {
+        // Episode-still mode keeps Player.GetItem art.
+        if source != PosterSource::Episode && npi.poster.is_none() {
+            if let Some(poster) = entry.poster.clone() {
+                npi.poster = Some(poster);
+            }
+        }
+        if npi.plot.is_none() {
+            if let Some(plot) = entry.plot_for(&npi.file).map(str::to_string) {
+                npi.plot = Some(plot);
+            }
+        }
+    }
+
+    fn fetch_crunchy_directory(
+        &self,
+        inst_idx: usize,
+        directory: &str,
+    ) -> Option<Vec<crunchyroll::DirectoryFile>> {
+        #[derive(Serialize)]
+        struct Params<'a> {
+            directory: &'a str,
+            properties: Vec<&'static str>,
+        }
+        let res: crunchyroll::FilesDirectoryResult = self
+            .jsonrpc(
+                &self.instances[inst_idx],
+                "Files.GetDirectory",
+                Params {
+                    directory,
+                    properties: crunchyroll::DIRECTORY_PROPERTIES.to_vec(),
+                },
+            )
+            .ok()?;
+        if crunchyroll::is_login_failure(&res.files) {
+            return None;
+        }
+        Some(res.files)
     }
 
     /// Dynamic buttons come from series/movie info (TMDB link, trailer) —
@@ -1896,6 +2033,7 @@ impl ClientBuilder {
             },
             large_image_text: self.large_image_text,
             poster_cache: HashMap::new(),
+            crunchy_cache: HashMap::new(),
         })
     }
 }

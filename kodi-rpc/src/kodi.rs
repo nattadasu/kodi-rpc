@@ -589,7 +589,7 @@ impl NowPlayingItem {
         let file = item.file.clone().unwrap_or_default();
         let is_plugin = file.starts_with("plugin://");
 
-        let media_type = MediaType::from_kodi(&item.item_type, &file);
+        let mut media_type = MediaType::from_kodi(&item.item_type, &file);
 
         // Pictures carry no watch status; anything else with a label or
         // file still counts as something playing.
@@ -620,14 +620,47 @@ impl NowPlayingItem {
 
         let addon_id = extract_addon_id(&file);
 
-        let season = item.season.filter(|s| *s >= 0);
-        let episode = item.episode.filter(|e| *e >= 0);
+        let mut season = item.season.filter(|s| *s >= 0);
+        let mut episode = item.episode.filter(|e| *e >= 0);
 
-        let showtitle = item
+        let mut showtitle = item
             .showtitle
             .clone()
             .filter(|s| !s.trim().is_empty())
             .map(|s| strip_kodi_tags(&s));
+
+        // Crunchyroll fallback: fill any missing episode fields from the
+        // `"{series} - S{SS}E{EE} - {episode}"` label. Fully rich items skip
+        // parsing; partial stubs get only their gaps filled.
+        if crate::crunchyroll::is_crunchyroll_addon(addon_id.as_deref())
+            && (media_type == MediaType::Unknown
+                || season.is_none()
+                || episode.is_none()
+                || showtitle.is_none())
+        {
+            let stripped_label = strip_kodi_tags(&item.label);
+            let from_name = crate::crunchyroll::parse_label(&name);
+            if let Some((show, s_num, e_num, ep_title)) = from_name
+                .clone()
+                .or_else(|| crate::crunchyroll::parse_label(&stripped_label))
+            {
+                if media_type == MediaType::Unknown {
+                    media_type = MediaType::Episode;
+                }
+                if season.is_none() {
+                    season = Some(s_num);
+                }
+                if episode.is_none() {
+                    episode = Some(e_num);
+                }
+                if showtitle.is_none() {
+                    showtitle = Some(show);
+                }
+                if from_name.is_some() {
+                    name = ep_title;
+                }
+            }
+        }
 
         let studio_joined = item
             .studio
@@ -649,8 +682,25 @@ impl NowPlayingItem {
             }
         };
 
-        // Dynamic buttons come from series/movie library info.
-        let external_urls = None;
+        // Dynamic buttons come from series/movie library info. Crunchyroll
+        // items also get Series/Watch links from the playback path, stub or not.
+        let external_urls = if crate::crunchyroll::is_crunchyroll_addon(addon_id.as_deref()) {
+            crate::crunchyroll::playback_ids(&file).map(|ids| {
+                let mut urls = vec![ExternalUrl {
+                    name: "Watch".to_string(),
+                    url: crate::crunchyroll::watch_url(&ids.episode),
+                }];
+                if let Some(series) = ids.series {
+                    urls.push(ExternalUrl {
+                        name: "Series".to_string(),
+                        url: crate::crunchyroll::series_url(&series),
+                    });
+                }
+                urls
+            })
+        } else {
+            None
+        };
 
         let id = if file.is_empty() {
             name.clone()
@@ -1166,6 +1216,92 @@ mod kodi_tests {
     }
 
     #[test]
+    fn crunchyroll_plugin_payload_promotes_to_episode() {
+        // Live capture from plugin.video.crunchyroll (smirgol 3.8.0):
+        // type unknown, season/episode -1, empty showtitle/title.
+        let raw = r#"{
+            "label": "The Duke's Son Claims He Won't Love Me, Yet Showers Me with Adoration - S01E07 - An Unexpected Gift",
+            "type": "unknown",
+            "season": -1,
+            "episode": -1,
+            "showtitle": "",
+            "title": "",
+            "tvshowid": -1,
+            "file": "plugin://plugin.video.crunchyroll/video/GT00378118/GE00378555JAJP/GE00378555JAJPV",
+            "thumbnail": "image://https%3a%2f%2fwww.crunchyroll.com%2fimgsrv%2fdisplay%2fthumbnail%2f1920x1080%2fcatalog%2fcrunchyroll%2f1397f82b5ef846af51683f99a0c3379d.png/",
+            "fanart": "image://https%3a%2f%2fwww.crunchyroll.com%2fimgsrv%2fdisplay%2fthumbnail%2f1920x1080%2fcatalog%2fcrunchyroll%2f1397f82b5ef846af51683f99a0c3379d.png/"
+        }"#;
+        let item: KodiItem = serde_json::from_str(raw).expect("item parses");
+        let props = PlayerGetPropertiesResult {
+            speed: 1.0,
+            time: KodiTime {
+                minutes: 3,
+                seconds: 54,
+                ..Default::default()
+            },
+            totaltime: KodiTime {
+                minutes: 22,
+                seconds: 48,
+                ..Default::default()
+            },
+            percentage: Some(17.14),
+        };
+        let npi = NowPlayingItem::from_kodi(&item, &props, "video").expect("displays");
+        assert_eq!(npi.media_type, MediaType::Episode);
+        assert!(npi.is_plugin);
+        assert_eq!(npi.addon_id.as_deref(), Some("plugin.video.crunchyroll"));
+        assert_eq!(
+            npi.series_name.as_deref(),
+            Some("The Duke's Son Claims He Won't Love Me, Yet Showers Me with Adoration")
+        );
+        assert_eq!(npi.parent_index_number, Some(1));
+        assert_eq!(npi.index_number, Some(7));
+        assert_eq!(npi.name, "An Unexpected Gift");
+        let buttons = npi.external_urls.as_ref().expect("crunchy buttons");
+        assert_eq!(buttons.len(), 2);
+        assert_eq!(buttons[0].name, "Watch");
+        assert_eq!(
+            buttons[0].url,
+            "https://www.crunchyroll.com/watch/GE00378555JAJP"
+        );
+        assert_eq!(buttons[1].name, "Series");
+        assert_eq!(
+            buttons[1].url,
+            "https://www.crunchyroll.com/series/GT00378118"
+        );
+        // Timestamps still work (known 22:48 runtime via totaltime).
+        let session = Session {
+            now_playing_item: npi,
+            play_state: PlayState::from_props(&props),
+            item_id: "x".to_string(),
+            source: 0,
+        };
+        assert!(matches!(session.get_time().unwrap(), PlayTime::Some(_, _)));
+    }
+
+    #[test]
+    fn crunchyroll_non_episode_label_stays_unknown() {
+        let raw = r#"{
+            "label": "Just a movie title",
+            "type": "unknown",
+            "season": -1,
+            "episode": -1,
+            "showtitle": "",
+            "title": "",
+            "file": "plugin://plugin.video.crunchyroll/video/GT00378118/GE00378555JAJP/GE00378555JAJPV"
+        }"#;
+        let item: KodiItem = serde_json::from_str(raw).expect("item parses");
+        let props = PlayerGetPropertiesResult {
+            speed: 1.0,
+            time: KodiTime::default(),
+            totaltime: KodiTime::default(),
+            percentage: None,
+        };
+        let npi = NowPlayingItem::from_kodi(&item, &props, "video").expect("displays");
+        assert_eq!(npi.media_type, MediaType::Unknown);
+    }
+
+    #[test]
     fn slyguy_crunchyroll_payload() {
         // Captured live from a SlyGuy Crunchyroll stream: library-style
         // episode fields, but tvshowid -1 and a localhost proxy file.
@@ -1205,6 +1341,71 @@ mod kodi_tests {
         assert_eq!(
             unwrap_remote_image(thumb).as_deref(),
             Some("https://www.crunchyroll.com/imgsrv/display/thumbnail/1920x1080/catalog/crunchyroll/1397f82b5ef846af51683f99a0c3379d.png")
+        );
+    }
+
+    #[test]
+    fn crunchyroll_partial_stub_backfills_gaps() {
+        // Addon-browser style partial stub: season survived, the rest didn't.
+        let raw = r#"{
+            "label": "The Duke's Son Claims He Won't Love Me, Yet Showers Me with Adoration - S01E07 - An Unexpected Gift",
+            "type": "unknown",
+            "season": 1,
+            "episode": -1,
+            "showtitle": "",
+            "title": "",
+            "file": "plugin://plugin.video.crunchyroll/video/GT00378118/GE00378555JAJP/GE00378555JAJPV"
+        }"#;
+        let item: KodiItem = serde_json::from_str(raw).expect("item parses");
+        let props = PlayerGetPropertiesResult {
+            speed: 1.0,
+            time: KodiTime::default(),
+            totaltime: KodiTime::default(),
+            percentage: None,
+        };
+        let npi = NowPlayingItem::from_kodi(&item, &props, "video").expect("displays");
+        assert_eq!(npi.media_type, MediaType::Episode);
+        assert_eq!(npi.parent_index_number, Some(1));
+        assert_eq!(npi.index_number, Some(7));
+        assert_eq!(
+            npi.series_name.as_deref(),
+            Some("The Duke's Son Claims He Won't Love Me, Yet Showers Me with Adoration")
+        );
+        assert_eq!(npi.name, "An Unexpected Gift");
+    }
+
+    #[test]
+    fn crunchyroll_rich_metadata_left_alone() {
+        let raw = r#"{
+            "label": "The Duke's Son Claims He Won't Love Me, Yet Showers Me with Adoration - S01E07 - An Unexpected Gift",
+            "type": "episode",
+            "season": 1,
+            "episode": 7,
+            "showtitle": "The Duke's Son Claims He Won't Love Me, Yet Showers Me with Adoration",
+            "title": "An Unexpected Gift",
+            "file": "plugin://plugin.video.crunchyroll/video/GT00378118/GE00378555JAJP/GE00378555JAJPV"
+        }"#;
+        let item: KodiItem = serde_json::from_str(raw).expect("item parses");
+        let props = PlayerGetPropertiesResult {
+            speed: 1.0,
+            time: KodiTime::default(),
+            totaltime: KodiTime::default(),
+            percentage: None,
+        };
+        let npi = NowPlayingItem::from_kodi(&item, &props, "video").expect("displays");
+        assert_eq!(npi.media_type, MediaType::Episode);
+        assert_eq!(npi.name, "An Unexpected Gift");
+        assert_eq!(npi.parent_index_number, Some(1));
+        assert_eq!(npi.index_number, Some(7));
+        let buttons = npi.external_urls.as_ref().expect("crunchy buttons");
+        assert_eq!(buttons.len(), 2);
+        assert_eq!(
+            buttons[0].url,
+            "https://www.crunchyroll.com/watch/GE00378555JAJP"
+        );
+        assert_eq!(
+            buttons[1].url,
+            "https://www.crunchyroll.com/series/GT00378118"
         );
     }
 }
