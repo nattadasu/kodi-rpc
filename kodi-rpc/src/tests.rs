@@ -210,6 +210,50 @@ fn episode_session(show: &str, title: &str, season: i32, episode: i32) -> Sessio
     }
 }
 
+fn music_session(track: &str, mb_artist: Option<&str>) -> Session {
+    let item = KodiItem {
+        label: track.to_string(),
+        item_type: "song".to_string(),
+        title: Some(track.to_string()),
+        artist: Some(vec!["wotaku".to_string(), "KAITO".to_string()]),
+        album: Some("TXTXXI".to_string()),
+        file: Some("/music/01.m4a".to_string()),
+        musicbrainzartistid: mb_artist.map(|id| vec![id.to_string()]),
+        ..Default::default()
+    };
+    let props = fake_props();
+    let npi = NowPlayingItem::from_kodi(&item, &props, "audio").expect("parses");
+    Session {
+        item_id: npi.id.clone(),
+        play_state: PlayState::from_props(&props),
+        now_playing_item: npi,
+        source: 0,
+    }
+}
+
+#[test]
+fn custom_button_musicbrainz_templates() {
+    let mb = "9363e137-212a-4d0c-8a05-53fba20c72c9";
+    let mut b = ClientBuilder::new();
+    b.url("http://localhost:8080").music_buttons(vec![
+        Button::new("dynamic".to_string(), "dynamic".to_string()),
+        Button::new(
+            "View {track} on MusicBrainz".to_string(),
+            "https://musicbrainz.org/artist/{musicbrainz-artist}".to_string(),
+        ),
+    ]);
+    let mut c = b.build().unwrap();
+    c.session = Some(music_session("TXTXXI", Some(mb)));
+    let btns = c.get_buttons().unwrap();
+    assert_eq!(btns.len(), 2);
+    assert_eq!(btns[0].name, "MusicBrainz Artist");
+    assert_eq!(btns[1].name, "View TXTXXI on MusicBrainz");
+    assert_eq!(btns[1].url, format!("https://musicbrainz.org/artist/{mb}"));
+
+    c.session = Some(music_session("TXTXXI", None));
+    assert!(c.get_buttons().unwrap().is_empty());
+}
+
 #[test]
 fn custom_button_templates_render() {
     let mut b = ClientBuilder::new();

@@ -890,6 +890,22 @@ impl Client {
             item.trailer_url.clone().unwrap_or_default(),
         ));
         values.push((
+            "{musicbrainz-track}".to_string(),
+            item.musicbrainz_track_id.clone().unwrap_or_default(),
+        ));
+        values.push((
+            "{musicbrainz-artist}".to_string(),
+            item.musicbrainz_artist_id.clone().unwrap_or_default(),
+        ));
+        values.push((
+            "{musicbrainz-album}".to_string(),
+            item.musicbrainz_album_id.clone().unwrap_or_default(),
+        ));
+        values.push((
+            "{musicbrainz-album-artist}".to_string(),
+            item.musicbrainz_album_artist_id.clone().unwrap_or_default(),
+        ));
+        values.push((
             "{version}".to_string(),
             VERSION.unwrap_or("UNKNOWN").to_string(),
         ));

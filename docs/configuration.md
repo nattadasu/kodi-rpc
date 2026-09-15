@@ -321,7 +321,7 @@ If you don't specify custom line text, Kodi-RPC uses these defaults for each med
 
 Unrecognized template variables are displayed as normal text. Any duplicate or leftover `{sep}` separators are cleaned up automatically.
 
-Up to 2 buttons per activity. `{"name": "dynamic", "url": "dynamic"}` links to the trailer and info pages (TMDB, TVDB, WeTrakr, IMDb). Labels cap at 32 characters, URLs over 512 characters are dropped.
+Up to 2 buttons per activity. `{"name": "dynamic", "url": "dynamic"}` links to the trailer and info pages (TMDB, TVDB, WeTrakr, IMDb; MusicBrainz for songs). Labels cap at 32 characters, URLs over 512 characters are dropped.
 
 ### Button Templates
 
@@ -357,11 +357,16 @@ Available in every section:
 | `{tvdb}` | `400123` |
 | `{imdb}` | `tt0120338` |
 | `{trailer}` | Trailer URL from the library |
+| `{musicbrainz-track}` | Recording MBID |
+| `{musicbrainz-artist}` | Artist MBID |
+| `{musicbrainz-album}` | Release MBID |
+| `{musicbrainz-album-artist}` | Album-artist MBID |
 
 Example: `{ "name": "WeTrakr", "url": "https://wetrakr.com/tmdb/movies/{tmdb}" }` → `https://wetrakr.com/tmdb/movies/550`
 
 Example: `{ "name": "Watch Trailer", "url": "{trailer}" }` → trailer button with a custom label.
 
+Example: `{ "name": "MusicBrainz", "url": "https://musicbrainz.org/artist/{musicbrainz-artist}" }` → artist page for the playing song.
 
 #### Rendering rules
 
@@ -385,6 +390,10 @@ Available placeholders per section:
 | `{artists}` | `M83` |
 | `{genres}` | `Electropop, Synthwave` |
 | `{year}` | `2011` |
+| `{musicbrainz-track}` | Recording MBID |
+| `{musicbrainz-artist}` | Artist MBID |
+| `{musicbrainz-album}` | Release MBID |
+| `{musicbrainz-album-artist}` | Album-artist MBID |
 | `{version}` | `1.2.0` |
 | `{sep}` | Separator string |
 

@@ -80,6 +80,10 @@ pub fn get_item_properties() -> Vec<&'static str> {
         "originaltitle",
         "albumartist",
         "track",
+        "musicbrainztrackid",
+        "musicbrainzartistid",
+        "musicbrainzalbumid",
+        "musicbrainzalbumartistid",
         "channeltype",
         "channelnumber",
         "tvshowid",
@@ -291,6 +295,14 @@ pub struct KodiItem {
     pub tagline: Option<String>,
     #[serde(default)]
     pub channeltype: Option<String>,
+    #[serde(default, deserialize_with = "string_or_vec")]
+    pub musicbrainztrackid: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "string_or_vec")]
+    pub musicbrainzartistid: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "string_or_vec")]
+    pub musicbrainzalbumid: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "string_or_vec")]
+    pub musicbrainzalbumartistid: Option<Vec<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +437,25 @@ pub fn imdb_id(details: &ArtHolder) -> Option<String> {
         None
     }
 }
+
+pub fn musicbrainz_url(kind: &str, id: &str) -> Option<String> {
+    if id.trim().is_empty() {
+        return None;
+    }
+    let segment = match kind {
+        "track" => "recording",
+        "artist" => "artist",
+        "album" => "release",
+        _ => return None,
+    };
+    Some(format!("https://musicbrainz.org/{segment}/{id}"))
+}
+
+fn first_id(ids: &Option<Vec<String>>) -> Option<String> {
+    ids.as_ref()
+        .and_then(|v| v.iter().find(|s| !s.trim().is_empty()).cloned())
+}
+
 pub fn tvdb_url(kind: &str, details: &ArtHolder) -> Option<String> {
     let tvdb = tvdb_id(details)?;
     let segment = match kind {
@@ -633,6 +664,10 @@ pub struct NowPlayingItem {
     pub tvdb_id: Option<String>,
     pub imdb_id: Option<String>,
     pub trailer_url: Option<String>,
+    pub musicbrainz_track_id: Option<String>,
+    pub musicbrainz_artist_id: Option<String>,
+    pub musicbrainz_album_id: Option<String>,
+    pub musicbrainz_album_artist_id: Option<String>,
 }
 
 impl NowPlayingItem {
@@ -737,8 +772,14 @@ impl NowPlayingItem {
             }
         };
 
+        let mb_track = first_id(&item.musicbrainztrackid);
+        let mb_artist = first_id(&item.musicbrainzartistid);
+        let mb_album = first_id(&item.musicbrainzalbumid);
+        let mb_album_artist = first_id(&item.musicbrainzalbumartistid);
+
         // Dynamic buttons come from series/movie library info. Crunchyroll
         // items also get Series/Watch links from the playback path, stub or not.
+        // Songs get MusicBrainz links straight from Player.GetItem tags.
         let external_urls = if crate::crunchyroll::is_crunchyroll_addon(addon_id.as_deref()) {
             crate::crunchyroll::playback_ids(&file).map(|ids| {
                 let mut urls = vec![ExternalUrl {
@@ -753,6 +794,27 @@ impl NowPlayingItem {
                 }
                 urls
             })
+        } else if media_type == MediaType::Music {
+            let mut urls = Vec::new();
+            if let Some(id) = mb_track.as_deref().and_then(|id| musicbrainz_url("track", id)) {
+                urls.push(ExternalUrl {
+                    name: "MusicBrainz Track".to_string(),
+                    url: id,
+                });
+            }
+            if let Some(id) = mb_artist.as_deref().and_then(|id| musicbrainz_url("artist", id)) {
+                urls.push(ExternalUrl {
+                    name: "MusicBrainz Artist".to_string(),
+                    url: id,
+                });
+            }
+            if let Some(id) = mb_album.as_deref().and_then(|id| musicbrainz_url("album", id)) {
+                urls.push(ExternalUrl {
+                    name: "MusicBrainz Album".to_string(),
+                    url: id,
+                });
+            }
+            if urls.is_empty() { None } else { Some(urls) }
         } else {
             None
         };
@@ -802,6 +864,10 @@ impl NowPlayingItem {
             tvdb_id: None,
             imdb_id: None,
             trailer_url: None,
+            musicbrainz_track_id: mb_track,
+            musicbrainz_artist_id: mb_artist,
+            musicbrainz_album_id: mb_album,
+            musicbrainz_album_artist_id: mb_album_artist,
         })
     }
 
@@ -1231,6 +1297,66 @@ mod kodi_tests {
         assert_eq!(first("tv", &d), None);
         let d = holder(None, None);
         assert_eq!(first("movie", &d), None);
+    }
+
+    #[test]
+    fn musicbrainz_url_shapes() {
+        assert_eq!(
+            musicbrainz_url("track", "abc").as_deref(),
+            Some("https://musicbrainz.org/recording/abc")
+        );
+        assert_eq!(
+            musicbrainz_url("artist", "abc").as_deref(),
+            Some("https://musicbrainz.org/artist/abc")
+        );
+        assert_eq!(
+            musicbrainz_url("album", "abc").as_deref(),
+            Some("https://musicbrainz.org/release/abc")
+        );
+        assert_eq!(musicbrainz_url("bogus", "abc"), None);
+        assert_eq!(musicbrainz_url("track", "   "), None);
+    }
+
+    #[test]
+    fn song_musicbrainz_ids_parse() {
+        let raw = r#"{
+            "label": "TXTXXI",
+            "type": "song",
+            "title": "TXTXXI",
+            "artist": ["wotaku", "KAITO"],
+            "album": "TXTXXI",
+            "file": "/run/media/nattadasu/Music/iTunes/iTunes Media/Music/wotaku/TXTXXI/01 TXTXXI.m4a",
+            "musicbrainztrackid": "",
+            "musicbrainzartistid": ["9363e137-212a-4d0c-8a05-53fba20c72c9", "66db94c7-229e-4d44-bb20-a8ba454edc71"],
+            "musicbrainzalbumid": "",
+            "musicbrainzalbumartistid": ["9363e137-212a-4d0c-8a05-53fba20c72c9"]
+        }"#;
+        let item: KodiItem = serde_json::from_str(raw).expect("item parses");
+        let props = PlayerGetPropertiesResult {
+            speed: 1.0,
+            time: KodiTime::default(),
+            totaltime: KodiTime::default(),
+            percentage: None,
+        };
+        let npi = NowPlayingItem::from_kodi(&item, &props, "audio").expect("displays");
+        assert_eq!(npi.media_type, MediaType::Music);
+        assert_eq!(
+            npi.musicbrainz_artist_id.as_deref(),
+            Some("9363e137-212a-4d0c-8a05-53fba20c72c9")
+        );
+        assert_eq!(
+            npi.musicbrainz_album_artist_id.as_deref(),
+            Some("9363e137-212a-4d0c-8a05-53fba20c72c9")
+        );
+        assert!(npi.musicbrainz_track_id.is_none());
+        assert!(npi.musicbrainz_album_id.is_none());
+        let buttons = npi.external_urls.as_ref().expect("mb buttons");
+        assert_eq!(buttons.len(), 1);
+        assert_eq!(buttons[0].name, "MusicBrainz Artist");
+        assert_eq!(
+            buttons[0].url,
+            "https://musicbrainz.org/artist/9363e137-212a-4d0c-8a05-53fba20c72c9"
+        );
     }
 
     #[test]
