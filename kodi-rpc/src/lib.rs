@@ -14,7 +14,7 @@ use kodi::{
     PlayerGetPropertiesResult, SeasonsResult, TVShowDetailsResult,
 };
 pub use kodi::{Button, MediaType};
-use log::debug;
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -179,23 +179,46 @@ impl Client {
 
             if session.now_playing_item.media_type == MediaType::LiveTv {
                 image_url = Url::from_str("https://i.imgur.com/XxdHOqm.png")?;
-            } else if self.imgur_options.enabled && self.show_images {
-                if let Ok(imgur_url) = external::imgur::get_image(self) {
-                    image_url = imgur_url;
-                } else {
-                    debug!("imgur::get_image() didnt return an image, using default..")
-                }
-            } else if self.litterbox_options.enabled && self.show_images {
-                if let Ok(litterbox_url) = external::litterbox::get_image(self) {
-                    image_url = litterbox_url;
-                } else {
-                    debug!("litterbox::get_image() didn't return an image, using default..")
-                }
             } else if self.show_images {
-                if let Ok(iu) = self.get_image() {
-                    image_url = iu;
-                } else {
-                    debug!("self.get_image() didnt return an image, using default..")
+                // Fallback chain: litterbox -> imgur -> remote CDN https
+                // (e.g. TMDB) -> Kodi-direct (public non-localhost, no auth)
+                // -> default icon. Upload failures warn (actionable) instead
+                // of silently sticking to the default icon.
+                let mut resolved: Option<Url> = None;
+
+                if resolved.is_none() && self.litterbox_options.enabled {
+                    match external::litterbox::get_image(self) {
+                        Ok(u) => resolved = Some(u),
+                        Err(e) => warn!(
+                            "litterbox image upload failed ({}), trying imgur/remote..",
+                            e
+                        ),
+                    }
+                }
+
+                if resolved.is_none() && self.imgur_options.enabled {
+                    match external::imgur::get_image(self) {
+                        Ok(u) => resolved = Some(u),
+                        Err(e) => warn!("imgur image upload failed ({}), trying remote..", e),
+                    }
+                }
+
+                if resolved.is_none() {
+                    match self.get_remote_image() {
+                        Ok(u) => resolved = Some(u),
+                        Err(e) => debug!("remote artwork not usable ({}), trying kodi-direct..", e),
+                    }
+                }
+
+                if resolved.is_none() {
+                    match self.get_kodi_direct_image() {
+                        Ok(u) => resolved = Some(u),
+                        Err(e) => debug!("kodi-direct artwork not usable ({}), using default..", e),
+                    }
+                }
+
+                if let Some(u) = resolved {
+                    image_url = u;
                 }
             }
 
@@ -552,7 +575,7 @@ impl Client {
                         .trailer
                         .clone()
                         .filter(|t| t.starts_with("http://") || t.starts_with("https://"))
-                        .filter(|t| !kodi::is_loopback_url(t));
+                        .filter(|t| !kodi::is_local_url(t));
                 }
                 debug!(
                     "Art for movie {}: poster={}, info={:?}, trailer={}",
@@ -882,9 +905,18 @@ impl Client {
                 .map(|y| y.to_string())
                 .unwrap_or_default(),
         ));
-        values.push(("{tmdb}".to_string(), item.tmdb_id.clone().unwrap_or_default()));
-        values.push(("{tvdb}".to_string(), item.tvdb_id.clone().unwrap_or_default()));
-        values.push(("{imdb}".to_string(), item.imdb_id.clone().unwrap_or_default()));
+        values.push((
+            "{tmdb}".to_string(),
+            item.tmdb_id.clone().unwrap_or_default(),
+        ));
+        values.push((
+            "{tvdb}".to_string(),
+            item.tvdb_id.clone().unwrap_or_default(),
+        ));
+        values.push((
+            "{imdb}".to_string(),
+            item.imdb_id.clone().unwrap_or_default(),
+        ));
         values.push((
             "{trailer}".to_string(),
             item.trailer_url.clone().unwrap_or_default(),
@@ -927,7 +959,7 @@ impl Client {
         if parsed.scheme() != "http" && parsed.scheme() != "https" {
             return false;
         }
-        !kodi::is_loopback_url(url)
+        !kodi::is_local_url(url)
     }
 
     fn render_custom_button(&self, button: &Button) -> Option<Button> {
@@ -977,7 +1009,7 @@ impl Client {
         ) {
             let ext_urls: Vec<&kodi::ExternalUrl> = ext_urls
                 .iter()
-                .filter(|eu| !kodi::is_loopback_url(&eu.url))
+                .filter(|eu| !kodi::is_local_url(&eu.url))
                 .collect();
             let mut i = 0;
             for button in buttons {
@@ -1014,7 +1046,7 @@ impl Client {
         } else if let Some(ext_urls) = &session.now_playing_item.external_urls {
             let ext_urls: Vec<&kodi::ExternalUrl> = ext_urls
                 .iter()
-                .filter(|eu| !kodi::is_loopback_url(&eu.url))
+                .filter(|eu| !kodi::is_local_url(&eu.url))
                 .collect();
             for ext_url in ext_urls {
                 if activity_buttons.len() == 2 {
@@ -1052,10 +1084,20 @@ impl Client {
     /// `image://` only when the owning server is public without auth
     /// (localhost/LAN URLs would break the whole presence render, so those
     /// fall back to the default icon — use imgur/litterbox uploads instead).
+    /// Prefers remote CDN art, then Kodi-direct art (see the split helpers).
     pub fn get_image(&self) -> KodiResult<Url> {
+        if let Ok(u) = self.get_remote_image() {
+            return Ok(u);
+        }
+        self.get_kodi_direct_image()
+    }
+
+    /// Remote CDN/plugin `https://` art (e.g. TMDB): publicly fetchable, needs
+    /// no upload and no Kodi-direct access. Never returns localhost/LAN or
+    /// plain-http URLs.
+    pub fn get_remote_image(&self) -> KodiResult<Url> {
         let session = self.session.as_ref().unwrap();
         let item = &session.now_playing_item;
-        let inst = &self.instances[session.source];
 
         for candidate in [
             item.poster.as_ref(),
@@ -1065,12 +1107,85 @@ impl Client {
         .into_iter()
         .flatten()
         {
-            if let Some(u) = Self::resolve_candidate(candidate, &inst.base, inst.direct_art, true) {
-                return Ok(u);
+            if let Some(u) = Self::resolve_remote_candidate(candidate) {
+                // Defense in depth: never hand Discord a local URL even if a
+                // CDN field was poisoned with one.
+                if !kodi::is_local_url(u.as_str()) {
+                    return Ok(u);
+                }
+            }
+        }
+        // Remote-https art from GetItem needs no Kodi-direct access: even a
+        // private/authed Kodi can serve it.
+        Err(Box::new(KodiError::NoImage))
+    }
+
+    /// Kodi `/image/` art for the owning server, only when it is publicly
+    /// reachable without auth (non-localhost, see `base_allows_direct_art`).
+    /// Upload paths (imgur/litterbox) should be preferred for local servers.
+    pub fn get_kodi_direct_image(&self) -> KodiResult<Url> {
+        let session = self.session.as_ref().unwrap();
+        let item = &session.now_playing_item;
+        let inst = &self.instances[session.source];
+        if !inst.direct_art {
+            return Err(Box::new(KodiError::NoImage));
+        }
+
+        for candidate in [
+            item.poster.as_ref(),
+            item.thumbnail.as_ref(),
+            item.fanart.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(u) = Self::resolve_kodi_candidate(candidate, &inst.base) {
+                if !kodi::is_local_url(u.as_str()) {
+                    return Ok(u);
+                }
             }
         }
 
         Err(Box::new(KodiError::NoImage))
+    }
+
+    /// Remote-only resolver: `image://https://...` unwraps and bare
+    /// `https://...` passes through. No `image://` -> `/image/` translation,
+    /// no plain-http.
+    fn resolve_remote_candidate(t: &str) -> Option<Url> {
+        let t = t.trim();
+        if t.is_empty() {
+            return None;
+        }
+        if let Some(inner) = kodi::unwrap_remote_image(t) {
+            if inner.starts_with("https://") {
+                if let Ok(u) = Url::parse(&inner) {
+                    return Some(u);
+                }
+            }
+            return None;
+        }
+        if t.starts_with("https://") {
+            if let Ok(u) = Url::parse(t) {
+                return Some(u);
+            }
+        }
+        None
+    }
+
+    /// Kodi-direct resolver: `image://...` -> `<base>/image/<encoded>`.
+    /// Callers must gate on `direct_art` + [`kodi::is_local_url`].
+    fn resolve_kodi_candidate(t: &str, base: &Url) -> Option<Url> {
+        let t = t.trim();
+        if t.is_empty() || !t.starts_with("image://") {
+            return None;
+        }
+        // Remote inner URLs are handled by the remote path, not here.
+        if kodi::unwrap_remote_image(t).is_some() {
+            return None;
+        }
+        let encoded = urlencoding::encode(t);
+        base.join(&format!("image/{}", encoded)).ok()
     }
 
     /// Resolve one art candidate. `direct` allows translating Kodi `image://`
@@ -2242,44 +2357,18 @@ impl ClientBuilder {
     }
 }
 
-/// True only for a publicly reachable Kodi without HTTP auth.
+/// True only for a publicly reachable Kodi without HTTP auth: the host must
+/// not be localhost/LAN/link-local/CGNAT/unspecified (IPv4, IPv6, `localhost`,
+/// `*.localhost`, `*.local`, … — see `kodi::host_is_local`).
 fn base_allows_direct_art(base: &Url, username: &str) -> bool {
     if !username.is_empty() {
         return false;
     }
     let host = match base.host_str() {
-        Some(h) => h.trim_end_matches('.').to_lowercase(),
+        Some(h) => h,
         None => return false,
     };
-    if host.is_empty()
-        || host == "localhost"
-        || host.ends_with(".localhost")
-        || host.ends_with(".local")
-        || host == "invalid"
-        || host.ends_with(".invalid")
-    {
-        return false;
-    }
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        match ip {
-            std::net::IpAddr::V4(v4) => {
-                if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
-                {
-                    return false;
-                }
-            }
-            std::net::IpAddr::V6(v6) => {
-                if v6.is_loopback() || v6.is_unspecified() {
-                    return false;
-                }
-                // unique local fc00::/7
-                if (v6.segments()[0] & 0xfe00) == 0xfc00 {
-                    return false;
-                }
-            }
-        }
-    }
-    true
+    !kodi::host_is_local(host)
 }
 
 fn build_kodi_http_client(

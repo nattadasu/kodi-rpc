@@ -257,10 +257,11 @@ fn custom_button_musicbrainz_templates() {
 #[test]
 fn custom_button_templates_render() {
     let mut b = ClientBuilder::new();
-    b.url("http://localhost:8080").movies_buttons(vec![Button::new(
-        "Search {title} Trailer".to_string(),
-        "https://www.youtube.com/results?search_query={title}+{year}+trailer".to_string(),
-    )]);
+    b.url("http://localhost:8080")
+        .movies_buttons(vec![Button::new(
+            "Search {title} Trailer".to_string(),
+            "https://www.youtube.com/results?search_query={title}+{year}+trailer".to_string(),
+        )]);
     let mut c = b.build().unwrap();
     c.session = Some(movie_session("Blade Runner 2049", Some(2017), None));
     let btns = c.get_buttons().unwrap();
@@ -275,10 +276,11 @@ fn custom_button_templates_render() {
 #[test]
 fn custom_button_missing_id_dropped() {
     let mut b = ClientBuilder::new();
-    b.url("http://localhost:8080").movies_buttons(vec![Button::new(
-        "WeTrakr".to_string(),
-        "https://wetrakr.com/tmdb/movies/{tmdb}".to_string(),
-    )]);
+    b.url("http://localhost:8080")
+        .movies_buttons(vec![Button::new(
+            "WeTrakr".to_string(),
+            "https://wetrakr.com/tmdb/movies/{tmdb}".to_string(),
+        )]);
     let mut c = b.build().unwrap();
     c.session = Some(movie_session("Some Title", None, None));
     assert!(c.get_buttons().unwrap().is_empty());
@@ -292,25 +294,30 @@ fn custom_button_missing_id_dropped() {
 #[test]
 fn custom_button_episode_templates() {
     let mut b = ClientBuilder::new();
-    b.url("http://localhost:8080").episodes_buttons(vec![Button::new(
-        "{show-title} S{season-padded}E{episode-padded}".to_string(),
-        "https://example.com/search?q={show-title}+{title}".to_string(),
-    )]);
+    b.url("http://localhost:8080")
+        .episodes_buttons(vec![Button::new(
+            "{show-title} S{season-padded}E{episode-padded}".to_string(),
+            "https://example.com/search?q={show-title}+{title}".to_string(),
+        )]);
     let mut c = b.build().unwrap();
     c.session = Some(episode_session("My Show", "Pilot Episode", 1, 7));
     let btns = c.get_buttons().unwrap();
     assert_eq!(btns.len(), 1);
     assert_eq!(btns[0].name, "My Show S01E07");
-    assert_eq!(btns[0].url, "https://example.com/search?q=My%20Show+Pilot%20Episode");
+    assert_eq!(
+        btns[0].url,
+        "https://example.com/search?q=My%20Show+Pilot%20Episode"
+    );
 }
 
 #[test]
 fn plain_custom_button_unchanged() {
     let mut b = ClientBuilder::new();
-    b.url("http://localhost:8080").movies_buttons(vec![Button::new(
-        "Donate".to_string(),
-        "https://example.com/donate".to_string(),
-    )]);
+    b.url("http://localhost:8080")
+        .movies_buttons(vec![Button::new(
+            "Donate".to_string(),
+            "https://example.com/donate".to_string(),
+        )]);
     let mut c = b.build().unwrap();
     c.session = Some(movie_session("Some Title", None, None));
     let btns = c.get_buttons().unwrap();
@@ -357,6 +364,37 @@ fn plugin_hotlink_art_passes_through() {
         c.get_image().unwrap().as_str(),
         "https://image.tmdb.org/t/p/original/abc.jpg"
     );
+    assert_eq!(
+        c.get_remote_image().unwrap().as_str(),
+        "https://image.tmdb.org/t/p/original/abc.jpg"
+    );
+}
+
+/// Remote CDN art resolves even on a private/authed Kodi; Kodi-direct stays
+/// gated on public no-auth hosts.
+#[test]
+fn remote_vs_kodi_direct_split() {
+    // Private LAN + auth: remote TMDB ok, kodi-direct rejected.
+    let mut c = client_for("http://192.168.1.6:8080", "kodi", "kodi");
+    let mut s = session_with_thumb(Some("image://video@foo/"), None);
+    s.now_playing_item.poster =
+        Some("image://https%3a%2f%2fimage.tmdb.org%2ft%2fp%2foriginal%2fabc.jpg/".to_string());
+    c.session = Some(s);
+    assert_eq!(
+        c.get_remote_image().unwrap().as_str(),
+        "https://image.tmdb.org/t/p/original/abc.jpg"
+    );
+    assert!(c.get_kodi_direct_image().is_err());
+
+    // Public no-auth: local `image://video@` art may go Kodi-direct.
+    let mut c = client_for("https://kodi.example.com", "", "");
+    c.session = Some(session_with_thumb(Some("image://video@foo/"), None));
+    let u = c.get_kodi_direct_image().unwrap();
+    assert!(u.as_str().starts_with("https://kodi.example.com/image/"));
+    // ...but plain LAN hosts never may, even without auth.
+    let mut c = client_for("http://192.168.1.6:8080", "", "");
+    c.session = Some(session_with_thumb(Some("image://video@foo/"), None));
+    assert!(c.get_kodi_direct_image().is_err());
 }
 
 /// Series/season/movie posters outrank the episode still for display.

@@ -796,25 +796,38 @@ impl NowPlayingItem {
             })
         } else if media_type == MediaType::Music {
             let mut urls = Vec::new();
-            if let Some(id) = mb_track.as_deref().and_then(|id| musicbrainz_url("track", id)) {
+            if let Some(id) = mb_track
+                .as_deref()
+                .and_then(|id| musicbrainz_url("track", id))
+            {
                 urls.push(ExternalUrl {
                     name: "MusicBrainz Track".to_string(),
                     url: id,
                 });
             }
-            if let Some(id) = mb_artist.as_deref().and_then(|id| musicbrainz_url("artist", id)) {
+            if let Some(id) = mb_artist
+                .as_deref()
+                .and_then(|id| musicbrainz_url("artist", id))
+            {
                 urls.push(ExternalUrl {
                     name: "MusicBrainz Artist".to_string(),
                     url: id,
                 });
             }
-            if let Some(id) = mb_album.as_deref().and_then(|id| musicbrainz_url("album", id)) {
+            if let Some(id) = mb_album
+                .as_deref()
+                .and_then(|id| musicbrainz_url("album", id))
+            {
                 urls.push(ExternalUrl {
                     name: "MusicBrainz Album".to_string(),
                     url: id,
                 });
             }
-            if urls.is_empty() { None } else { Some(urls) }
+            if urls.is_empty() {
+                None
+            } else {
+                Some(urls)
+            }
         } else {
             None
         };
@@ -879,8 +892,8 @@ impl NowPlayingItem {
         }
         if self.file.starts_with("http://") || self.file.starts_with("https://") {
             if let Ok(u) = url::Url::parse(&self.file) {
-                if is_loopback_url(&self.file) {
-                    // Local playback proxies (e.g. SlyGuy's 127.0.0.1 proxy)
+                if is_local_url(&self.file) {
+                    // Local/LAN playback proxies (e.g. SlyGuy's 127.0.0.1 proxy)
                     // wrap the real stream in a `url` param — show its host.
                     if let Some(inner) = u
                         .query_pairs()
@@ -1111,19 +1124,153 @@ pub fn extract_addon_id(file: &str) -> Option<String> {
     }
 }
 
+/// True when an IP is not globally reachable (loopback, private/LAN,
+/// link-local, shared CGNAT, documentation, unspecified, multicast, ...).
+/// Fail-closed so Discord never gets a URL it can't fetch.
+pub fn is_local_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let o = v4.octets();
+            // Stable std checks first.
+            if v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.is_documentation()
+            {
+                return true;
+            }
+            // Shared CGNAT 100.64.0.0/10 (RFC6598).
+            if o[0] == 100 && (o[1] & 0xc0) == 64 {
+                return true;
+            }
+            // Benchmarking 198.18.0.0/15 (RFC2544).
+            if o[0] == 198 && (o[1] == 18 || o[1] == 19) {
+                return true;
+            }
+            // Reserved 240.0.0.0/4 (includes broadcast tail).
+            if o[0] >= 240 {
+                return true;
+            }
+            false
+        }
+        std::net::IpAddr::V6(v6) => {
+            if v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() {
+                return true;
+            }
+            let seg = v6.segments();
+            // Unique local fc00::/7.
+            if (seg[0] & 0xfe00) == 0xfc00 {
+                return true;
+            }
+            // Link-local fe80::/10.
+            if (seg[0] & 0xffc0) == 0xfe80 {
+                return true;
+            }
+            // Documentation 2001:db8::/32.
+            if seg[0] == 0x2001 && seg[1] == 0x0db8 {
+                return true;
+            }
+            // Discard prefix 100::/64, benchmarking handled via multicast above.
+            false
+        }
+    }
+}
+
+/// True when a URL host is local/private and therefore unfetchable by
+/// Discord (or any other viewer): IPs covered by [`is_local_ip`], plus
+/// `localhost`, mDNS (`.local`), and other non-public suffixes. Single-label
+/// names (`kodi`, `nas`, ...) are LAN names — also local.
+pub fn host_is_local(host: &str) -> bool {
+    let h = host.trim().trim_end_matches('.').to_lowercase();
+    if h.is_empty() {
+        return true;
+    }
+    // Strip stray brackets so `[::1]`-style hosts still parse.
+    let stripped = h.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = stripped.parse::<std::net::IpAddr>() {
+        return is_local_ip(ip);
+    }
+    if h == "localhost"
+        || h == "invalid"
+        || h == "test"
+        || h == "example"
+        || h == "internal"
+        || h == "lan"
+        || h == "home"
+        || h == "localdomain"
+        || h == "intranet"
+        || h == "private"
+    {
+        return true;
+    }
+    for suffix in [
+        ".localhost",
+        ".local",
+        ".invalid",
+        ".test",
+        ".example",
+        ".internal",
+        ".lan",
+        ".home",
+        ".home.arpa",
+        ".localdomain",
+        ".intranet",
+        ".private",
+    ] {
+        if h.ends_with(suffix) {
+            return true;
+        }
+    }
+    // No dot = LAN name, not public DNS.
+    if !h.contains('.') && !h.contains(':') {
+        return true;
+    }
+    false
+}
+
+/// True for local/private URLs (unopenable by anyone else, including
+/// Discord's image/button proxy). Covers loopback (v4/v6), private LAN,
+/// link-local, CGNAT, `localhost`, `*.localhost`, `*.local`, and friends —
+/// not just `localhost`/`127.0.0.1`/`::1`.
+pub fn is_local_url(url: &str) -> bool {
+    match url::Url::parse(url) {
+        Ok(u) => match u.host_str() {
+            Some(h) => host_is_local(h),
+            // No host (e.g. `file:`, `plugin:`) — not Discord-fetchable.
+            None => true,
+        },
+        Err(_) => {
+            // Malformed URL: fall back to prefix checks so at least the
+            // classic loopbacks are still caught.
+            let lower = url.to_lowercase();
+            [
+                "http://localhost",
+                "https://localhost",
+                "http://127.",
+                "https://127.",
+                "http://[::1]",
+                "https://[::1]",
+                "http://[fe80",
+                "https://[fe80",
+                "http://[fc00",
+                "https://[fc00",
+                "http://[fd00",
+                "https://[fd00",
+            ]
+            .iter()
+            .any(|p| lower.starts_with(p))
+        }
+    }
+}
+
 /// True for loopback URLs (unopenable by anyone else, including Discord).
+/// Kept for backwards compatibility — now covers all local/private hosts,
+/// see [`is_local_url`].
 pub fn is_loopback_url(url: &str) -> bool {
-    let lower = url.to_lowercase();
-    [
-        "http://localhost",
-        "https://localhost",
-        "http://127.0.0.1",
-        "https://127.0.0.1",
-        "http://[::1]",
-        "https://[::1]",
-    ]
-    .iter()
-    .any(|p| lower.starts_with(p))
+    is_local_url(url)
 }
 
 /// Unwrap `image://<url-encoded>/` to the inner URL for remote files.
@@ -1259,6 +1406,42 @@ mod kodi_tests {
     }
 
     #[test]
+    fn local_url_detection_covers_lan_and_aliases() {
+        // IPv4: loopback range, RFC1918, link-local, CGNAT.
+        assert!(is_local_url("http://127.0.0.2:8080/x"));
+        assert!(is_local_url("http://192.168.1.6:8080/image/a"));
+        assert!(is_local_url("http://10.0.0.5/x"));
+        assert!(is_local_url("http://172.16.4.2/x"));
+        assert!(is_local_url("http://169.254.10.20/x"));
+        assert!(is_local_url("http://100.64.0.1/x"));
+        assert!(is_local_url("http://0.0.0.0:8080/x"));
+        // IPv6: loopback, link-local, unique-local.
+        assert!(is_local_url("http://[::1]:8080/x"));
+        assert!(is_local_url("http://[fe80::1]/x"));
+        assert!(is_local_url("http://[fc00::1]/x"));
+        assert!(is_local_url("http://[fd00::1]/x"));
+        // Hostname aliases + mDNS/LAN suffixes + single-label LAN names.
+        assert!(is_local_url("http://kodi.local:8080/x"));
+        assert!(is_local_url("http://mediaserver.localdomain/x"));
+        assert!(is_local_url("http://nas.lan/x"));
+        assert!(is_local_url("http://server.home.arpa/x"));
+        assert!(is_local_url("http://myhost.internal/x"));
+        assert!(is_local_url("http://box.invalid/x"));
+        assert!(is_local_url("http://kodi:8080/jsonrpc"));
+        assert!(host_is_local("myserver"));
+        assert!(host_is_local("localhost"));
+        assert!(host_is_local("box.lan"));
+        assert!(host_is_local("192.168.1.1"));
+        assert!(host_is_local("::1"));
+        // Public names/IPs stay usable.
+        assert!(!is_local_url("https://kodi.example.com/jsonrpc"));
+        assert!(!is_local_url("https://example.com/x"));
+        assert!(!is_local_url("https://8.8.8.8/x"));
+        assert!(!host_is_local("kodi.example.com"));
+        assert!(!host_is_local("8.8.8.8"));
+    }
+
+    #[test]
     fn info_url_prefers_tmdb() {
         use serde_json::Value;
         use std::collections::HashMap;
@@ -1273,9 +1456,8 @@ mod kodi_tests {
             .collect(),
             trailer: None,
         };
-        let first = |kind: &str, d: &ArtHolder| {
-            info_urls(kind, d).into_iter().next().map(|e| e.url)
-        };
+        let first =
+            |kind: &str, d: &ArtHolder| info_urls(kind, d).into_iter().next().map(|e| e.url);
         // Numeric tmdb tolerated; series vs movie paths differ.
         let d = holder(Some(Value::from(312849)), Some("tt41278600"));
         assert_eq!(
@@ -1379,10 +1561,7 @@ mod kodi_tests {
         assert_eq!(urls[0].name, "The Movie DB");
         assert_eq!(urls[0].url, "https://www.themoviedb.org/tv/312849");
         assert_eq!(urls[1].name, "The TVDB");
-        assert_eq!(
-            urls[1].url,
-            "https://thetvdb.com/dereferrer/series/400123"
-        );
+        assert_eq!(urls[1].url, "https://thetvdb.com/dereferrer/series/400123");
         assert_eq!(urls[2].name, "WeTrakr");
         assert_eq!(urls[2].url, "https://wetrakr.com/tmdb/shows/312849");
         assert_eq!(urls[3].name, "IMDb");
