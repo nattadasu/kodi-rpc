@@ -84,6 +84,8 @@ pub struct Images {
     pub imgur_images: bool,
     /// Enables litterbox images.
     pub litterbox_images: bool,
+    /// Enables tmpfiles.org images (tried before litterbox/imgur).
+    pub tmpfiles_images: bool,
     /// Processes images by making them square and adding a blur.
     pub process_images: bool,
     /// The size of the output square image canvas (e.g., 512 for 512x512px).
@@ -200,6 +202,7 @@ pub struct ImagesBuilder {
     pub enable_images: Option<bool>,
     pub imgur_images: Option<bool>,
     pub litterbox_images: Option<bool>,
+    pub tmpfiles_images: Option<bool>,
     pub process_images: Option<bool>,
     /// The size of the output square image canvas (e.g., 512 for 512x512px).
     pub size: Option<u32>,
@@ -414,6 +417,7 @@ impl ConfigBuilder {
         let enable_images;
         let imgur_images;
         let litterbox_images;
+        let tmpfiles_images;
         let process_images;
         let image_size;
         let image_bg;
@@ -424,6 +428,7 @@ impl ConfigBuilder {
             enable_images = images.enable_images.unwrap_or(false);
             imgur_images = images.imgur_images.unwrap_or(false);
             litterbox_images = images.litterbox_images.unwrap_or(false);
+            tmpfiles_images = images.tmpfiles_images.unwrap_or(false);
             process_images = images.process_images.unwrap_or(true);
             image_size = images.size;
             image_bg = images.bg.unwrap_or(true);
@@ -433,6 +438,7 @@ impl ConfigBuilder {
             enable_images = false;
             imgur_images = false;
             litterbox_images = false;
+            tmpfiles_images = false;
             process_images = true;
             image_size = None;
             image_bg = true;
@@ -552,6 +558,7 @@ impl ConfigBuilder {
                 enable_images,
                 imgur_images,
                 litterbox_images,
+                tmpfiles_images,
                 process_images,
                 size: image_size,
                 bg: image_bg,

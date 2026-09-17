@@ -24,7 +24,7 @@ Symptom-first fixes for problems actually hit with this app. Run with
 An unfetchable `large_image` kills the whole render, not just the picture.
 `localhost`/LAN/authed Kodi artwork URLs can never load in Discord — the
 debug line `didnt return an image, using default..` means the fallback
-icon was used instead. Fix: enable `litterbox_images` (or `imgur_images`)
+icon was used instead. Fix: enable `tmpfiles_images` (or `litterbox_images`/`imgur_images`)
 so local art uploads first, or turn images off.
 
 ## Polls stall or presence freezes

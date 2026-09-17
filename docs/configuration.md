@@ -159,6 +159,7 @@ Override the default location with `-c /path/to/main.json`.
         "enable_images": { "type": "boolean" },
         "imgur_images": { "type": "boolean" },
         "litterbox_images": { "type": "boolean" },
+        "tmpfiles_images": { "type": "boolean" },
         "process_images": { "type": "boolean" },
         "size": { "type": "integer" },
         "bg": { "type": "boolean" },
@@ -475,13 +476,14 @@ Credentials for Imgur image hosting.
 Artwork pipeline, processing, and hosting configuration.
 
 Precedence order for artwork: Series/Season/Movie Poster → Episode Still → Fanart.
-Direct HTTP/HTTPS URLs (including remote `image://` URLs) are passed directly to Discord. Local Kodi `image://` artwork is served directly to Discord only if Kodi is publicly accessible without authentication. Otherwise, artwork must be uploaded (via Imgur or Litterbox) or falls back to default artwork.
+Direct HTTP/HTTPS URLs (including remote `image://` URLs) are passed directly to Discord. Local Kodi `image://` artwork is served directly to Discord only if Kodi is publicly accessible without authentication. Otherwise, artwork must be uploaded (via tmpfiles.org, Imgur, or Litterbox, tried in that order) or falls back to default artwork.
 
 | Key | Type | Required | Default | Description |
 | :--- | :---: | :---: | :---: | :--- |
 | `enable_images` | `boolean` | No | `false` | Master toggle for artwork retrieval and processing. |
 | `imgur_images` | `boolean` | No | `false` | Upload artwork to Imgur (requires [`imgur.client_id`](#imgur)). Creates permanent links. |
 | `litterbox_images` | `boolean` | No | `false` | Upload artwork to Litterbox (Catbox). Links expire after 72 hours; cache evicts and re-uploads automatically. |
+| `tmpfiles_images` | `boolean` | No | `false` | Upload artwork to tmpfiles.org (tried before litterbox/imgur, max 48h retention). The served bytes are verified identical to the upload; cache evicts and re-uploads automatically. |
 | `process_images` | `boolean` | No | `true` | Crop and format artwork into a 1:1 square canvas before uploading. |
 | `size` | `integer` | No | Original size | Output canvas square dimensions in pixels (e.g., `512`). |
 | `bg` | `boolean` | No | `true` | Add a blurred background behind non-square artwork. |

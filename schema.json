@@ -133,6 +133,7 @@
         "enable_images": { "type": "boolean" },
         "imgur_images": { "type": "boolean" },
         "litterbox_images": { "type": "boolean" },
+        "tmpfiles_images": { "type": "boolean" },
         "process_images": { "type": "boolean" },
         "size": { "type": "integer" },
         "bg": { "type": "boolean" },

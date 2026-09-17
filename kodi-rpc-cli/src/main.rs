@@ -112,6 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .show_images(conf.images.enable_images)
         .use_imgur(conf.images.imgur_images)
         .use_litterbox(conf.images.litterbox_images)
+        .use_tmpfiles(conf.images.tmpfiles_images)
         .process_images(conf.images.process_images)
         .image_size(conf.images.size)
         .image_background(conf.images.bg)
@@ -119,7 +120,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .image_corner_radius(conf.images.corner_radius)
         .large_image_text(format!("Kodi-RPC v{}", version_string()))
         .imgur_urls_file_location(args.image_urls.clone().unwrap_or(get_urls_path()?))
-        .litterbox_urls_file_location(args.image_urls.unwrap_or(get_urls_path()?));
+        .litterbox_urls_file_location(args.image_urls.clone().unwrap_or(get_urls_path()?))
+        .tmpfiles_urls_file_location(args.image_urls.unwrap_or(get_urls_path()?));
 
     if let Some(display) = conf.kodi.music.display {
         debug!("Found config.kodi.music.display");

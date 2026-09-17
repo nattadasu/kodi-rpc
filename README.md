@@ -100,7 +100,7 @@ Legacy `{"jellyfin": {...}}` configs are auto-mapped to `{"kodi": {...}}`.
 - **Multiple instances**: add an `instances` array — whichever box plays
   first owns the presence until it stops.
 - **Poster-first artwork**: series/season/movie posters over episode stills
-  (configurable per `poster_source`); local art uploads to imgur/litterbox.
+   (configurable per `poster_source`); local art uploads to tmpfiles/imgur/litterbox.
 - **Display templates** per media type, blacklist by type or path, dynamic
   TMDB/trailer buttons, pause-aware presence.
 

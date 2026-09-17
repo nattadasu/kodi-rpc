@@ -103,6 +103,7 @@ pub struct Client {
     show_images: bool,
     imgur_options: ImgurOptions,
     litterbox_options: LitterboxOptions,
+    tmpfiles_options: TmpfilesOptions,
     process_images: bool,
     image_processing_options: external::image_utils::ImageProcessingOptions,
     large_image_text: String,
@@ -114,6 +115,7 @@ pub struct Client {
     /// re-upload every 7s poll. Per-art failures (no art) don't set this.
     litterbox_backoff: ServiceBackoff,
     imgur_backoff: ServiceBackoff,
+    tmpfiles_backoff: ServiceBackoff,
 }
 
 use kodi::Session;
@@ -121,6 +123,7 @@ use kodi::Session;
 /// Which image-upload service a backoff / attempt refers to.
 #[derive(Debug, Clone, Copy)]
 enum UploadService {
+    Tmpfiles,
     Litterbox,
     Imgur,
 }
@@ -128,6 +131,7 @@ enum UploadService {
 impl UploadService {
     fn name(self) -> &'static str {
         match self {
+            Self::Tmpfiles => "tmpfiles",
             Self::Litterbox => "litterbox",
             Self::Imgur => "imgur",
         }
@@ -204,6 +208,7 @@ impl Client {
 
     fn backoff(&mut self, service: UploadService) -> &mut ServiceBackoff {
         match service {
+            UploadService::Tmpfiles => &mut self.tmpfiles_backoff,
             UploadService::Litterbox => &mut self.litterbox_backoff,
             UploadService::Imgur => &mut self.imgur_backoff,
         }
@@ -211,6 +216,7 @@ impl Client {
 
     fn upload_enabled(&self, service: UploadService) -> bool {
         match service {
+            UploadService::Tmpfiles => self.tmpfiles_options.enabled,
             UploadService::Litterbox => self.litterbox_options.enabled,
             UploadService::Imgur => self.imgur_options.enabled,
         }
@@ -224,6 +230,7 @@ impl Client {
             return None;
         }
         let res = match service {
+            UploadService::Tmpfiles => external::tmpfiles::get_image(self),
             UploadService::Litterbox => external::litterbox::get_image(self),
             UploadService::Imgur => external::imgur::get_image(self),
         };
@@ -279,12 +286,16 @@ impl Client {
         if media_type == MediaType::LiveTv {
             image_url = Url::from_str("https://i.imgur.com/XxdHOqm.png")?;
         } else if self.show_images {
-            // Fallback chain: litterbox -> imgur -> remote CDN https
-            // (e.g. TMDB) -> Kodi-direct (public non-localhost, no auth)
-            // -> default icon. Upload failures warn once per cooldown
-            // instead of re-downloading + re-uploading every poll.
+            // Fallback chain: tmpfiles -> litterbox -> imgur -> remote CDN
+            // https (e.g. TMDB) -> Kodi-direct (public non-localhost, no
+            // auth) -> default icon. Upload failures warn once per
+            // cooldown instead of re-downloading + re-uploading every poll.
             let mut resolved: Option<Url> = None;
-            for service in [UploadService::Litterbox, UploadService::Imgur] {
+            for service in [
+                UploadService::Tmpfiles,
+                UploadService::Litterbox,
+                UploadService::Imgur,
+            ] {
                 if resolved.is_none() {
                     resolved = self.try_upload(service);
                 }
@@ -1169,7 +1180,7 @@ impl Client {
     /// Artwork URL Discord can fetch: plugin/CDN hotlinks always, Kodi
     /// `image://` only when the owning server is public without auth
     /// (localhost/LAN URLs would break the whole presence render, so those
-    /// fall back to the default icon — use imgur/litterbox uploads instead).
+    /// fall back to the default icon — use tmpfiles/imgur/litterbox uploads instead).
     /// Prefers remote CDN art, then Kodi-direct art (see the split helpers).
     pub fn get_image(&self) -> KodiResult<Url> {
         if let Ok(u) = self.get_remote_image() {
@@ -1208,7 +1219,7 @@ impl Client {
 
     /// Kodi `/image/` art for the owning server, only when it is publicly
     /// reachable without auth (non-localhost, see `base_allows_direct_art`).
-    /// Upload paths (imgur/litterbox) should be preferred for local servers.
+    /// Upload paths (tmpfiles/imgur/litterbox) should be preferred for local servers.
     pub fn get_kodi_direct_image(&self) -> KodiResult<Url> {
         let session = self.session.as_ref().unwrap();
         let item = &session.now_playing_item;
@@ -1309,7 +1320,7 @@ impl Client {
         None
     }
 
-    /// Raw artwork URL for byte downloads (imgur/litterbox). Always resolves
+    /// Raw artwork URL for byte downloads (tmpfiles/imgur/litterbox). Always resolves
     /// `image://` via our authed client; never hand to Discord directly.
     fn artwork_download_url(&self) -> KodiResult<Url> {
         let session = self.session.as_ref().unwrap();
@@ -1991,6 +2002,11 @@ struct LitterboxOptions {
     urls_location: String,
 }
 
+struct TmpfilesOptions {
+    enabled: bool,
+    urls_location: String,
+}
+
 /// Used to build a new Client
 #[derive(Default)]
 pub struct ClientBuilder {
@@ -2032,6 +2048,8 @@ pub struct ClientBuilder {
     imgur_urls_file_location: String,
     use_litterbox: bool,
     litterbox_urls_file_location: String,
+    use_tmpfiles: bool,
+    tmpfiles_urls_file_location: String,
     large_image_text: String,
     process_images: bool,
     image_size: Option<u32>,
@@ -2285,12 +2303,23 @@ impl ClientBuilder {
         self
     }
 
+    /// Use tmpfiles.org for images (tried before litterbox/imgur)
+    pub fn use_tmpfiles(&mut self, val: bool) -> &mut Self {
+        self.use_tmpfiles = val;
+        self
+    }
+
+    pub fn tmpfiles_urls_file_location<T: Into<String>>(&mut self, location: T) -> &mut Self {
+        self.tmpfiles_urls_file_location = location.into();
+        self
+    }
+
     pub fn litterbox_urls_file_location<T: Into<String>>(&mut self, location: T) -> &mut Self {
         self.litterbox_urls_file_location = location.into();
         self
     }
 
-    /// Process images before uploading to imgur or litterbox
+    /// Process images before uploading to tmpfiles, imgur or litterbox
     pub fn process_images(&mut self, val: bool) -> &mut Self {
         self.process_images = val;
         self
@@ -2429,6 +2458,10 @@ impl ClientBuilder {
                 enabled: self.use_litterbox,
                 urls_location: self.litterbox_urls_file_location,
             },
+            tmpfiles_options: TmpfilesOptions {
+                enabled: self.use_tmpfiles,
+                urls_location: self.tmpfiles_urls_file_location,
+            },
             process_images: self.process_images,
             image_processing_options: external::image_utils::ImageProcessingOptions {
                 size: self.image_size,
@@ -2441,6 +2474,7 @@ impl ClientBuilder {
             crunchy_cache: HashMap::new(),
             litterbox_backoff: ServiceBackoff::default(),
             imgur_backoff: ServiceBackoff::default(),
+            tmpfiles_backoff: ServiceBackoff::default(),
         })
     }
 }
