@@ -156,13 +156,19 @@ fn upload(client: &Client) -> KodiResult<Url> {
             Part::bytes(file_bytes).file_name(filename + ".jpg"),
         );
 
-    let res: String = litterbox_client
-        .post("https://litterbox.catbox.moe/resources/internals/api.php")
-        .multipart(litterbox_form)
-        .send()?
-        .text()?;
+    let res = super::upload_body(
+        "litterbox",
+        litterbox_client
+            .post("https://litterbox.catbox.moe/resources/internals/api.php")
+            .multipart(litterbox_form)
+            .send()?,
+    )?;
 
-    debug!("Response from Litterbox: \"{}\"", res.clone());
+    debug!("Response from Litterbox: \"{}\"", super::snippet(&res));
+
+    if !(res.starts_with("http://") || res.starts_with("https://")) {
+        return Err(format!("litterbox rejected upload: {}", super::snippet(&res)).into());
+    }
 
     Ok(Url::parse(&res)?)
 }

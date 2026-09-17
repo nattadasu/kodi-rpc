@@ -110,9 +110,52 @@ pub struct Client {
     poster_cache: HashMap<String, CachedArt>,
     /// Crunchyroll series lookups, same zero-per-poll goal.
     crunchy_cache: HashMap<String, CrunchySeriesEntry>,
+    /// Service-wide upload backoff: a 502/429 must not re-download +
+    /// re-upload every 7s poll. Per-art failures (no art) don't set this.
+    litterbox_backoff: ServiceBackoff,
+    imgur_backoff: ServiceBackoff,
 }
 
 use kodi::Session;
+
+/// Which image-upload service a backoff / attempt refers to.
+#[derive(Debug, Clone, Copy)]
+enum UploadService {
+    Litterbox,
+    Imgur,
+}
+
+impl UploadService {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Litterbox => "litterbox",
+            Self::Imgur => "imgur",
+        }
+    }
+}
+
+/// Skip-a-failing-uploader backoff: a 502/429 must not re-download +
+/// re-upload every poll. Per-art failures (no art) don't set this.
+#[derive(Default)]
+struct ServiceBackoff {
+    until: Option<std::time::Instant>,
+}
+
+impl ServiceBackoff {
+    const COOLDOWN: std::time::Duration = std::time::Duration::from_secs(300);
+
+    fn active(&self) -> bool {
+        self.until.is_some_and(|t| std::time::Instant::now() < t)
+    }
+
+    fn note_failure(&mut self) {
+        self.until = Some(std::time::Instant::now() + Self::COOLDOWN);
+    }
+
+    fn clear(&mut self) {
+        self.until = None;
+    }
+}
 
 impl Client {
     /// Calls the `ClientBuilder::new()` function
@@ -159,163 +202,206 @@ impl Client {
             .map(|i| i.name.clone())
     }
 
+    fn backoff(&mut self, service: UploadService) -> &mut ServiceBackoff {
+        match service {
+            UploadService::Litterbox => &mut self.litterbox_backoff,
+            UploadService::Imgur => &mut self.imgur_backoff,
+        }
+    }
+
+    fn upload_enabled(&self, service: UploadService) -> bool {
+        match service {
+            UploadService::Litterbox => self.litterbox_options.enabled,
+            UploadService::Imgur => self.imgur_options.enabled,
+        }
+    }
+
+    /// One upload attempt with backoff bookkeeping: skipped while cooling
+    /// down, `None` on any failure (warned once per cooldown for outages,
+    /// debug for per-item "nothing to upload").
+    fn try_upload(&mut self, service: UploadService) -> Option<Url> {
+        if !self.upload_enabled(service) || self.backoff(service).active() {
+            return None;
+        }
+        let res = match service {
+            UploadService::Litterbox => external::litterbox::get_image(self),
+            UploadService::Imgur => external::imgur::get_image(self),
+        };
+        match res {
+            Ok(u) => {
+                self.backoff(service).clear();
+                Some(u)
+            }
+            Err(e) => {
+                if Self::is_no_image(&e) {
+                    debug!("{}: no artwork to upload ({})", service.name(), e);
+                } else {
+                    self.backoff(service).note_failure();
+                    warn!(
+                        "{} image upload failed ({}), trying fallback..",
+                        service.name(),
+                        e
+                    );
+                }
+                None
+            }
+        }
+    }
+
+    /// True when there is simply no artwork (per-item), not a service
+    /// outage — those must not trigger the service-wide cooldown.
+    fn is_no_image(e: &Box<dyn std::error::Error>) -> bool {
+        e.downcast_ref::<KodiError>()
+            .is_some_and(|k| matches!(k, KodiError::NoImage))
+    }
+
     /// Polls Kodi and pushes the presence to Discord. Plugin
     /// (`type: "unknown"`) streams display like any other content.
     pub fn set_activity(&mut self) -> KodiResult<String> {
         self.get_session()?;
 
-        if let Some(session) = &self.session {
-            if session.now_playing_item.media_type == MediaType::None {
-                return Err(Box::new(KodiError::UnrecognizedMediaType));
-            }
-
-            if self.check_blacklist()? {
-                return Err(Box::new(KodiError::ContentBlacklist));
-            }
-
-            let mut activity = Activity::new();
-
-            let mut image_url = Url::from_str("https://i.imgur.com/koCh16G.png")?;
-
-            if session.now_playing_item.media_type == MediaType::LiveTv {
-                image_url = Url::from_str("https://i.imgur.com/XxdHOqm.png")?;
-            } else if self.show_images {
-                // Fallback chain: litterbox -> imgur -> remote CDN https
-                // (e.g. TMDB) -> Kodi-direct (public non-localhost, no auth)
-                // -> default icon. Upload failures warn (actionable) instead
-                // of silently sticking to the default icon.
-                let mut resolved: Option<Url> = None;
-
-                if resolved.is_none() && self.litterbox_options.enabled {
-                    match external::litterbox::get_image(self) {
-                        Ok(u) => resolved = Some(u),
-                        Err(e) => warn!(
-                            "litterbox image upload failed ({}), trying imgur/remote..",
-                            e
-                        ),
-                    }
-                }
-
-                if resolved.is_none() && self.imgur_options.enabled {
-                    match external::imgur::get_image(self) {
-                        Ok(u) => resolved = Some(u),
-                        Err(e) => warn!("imgur image upload failed ({}), trying remote..", e),
-                    }
-                }
-
-                if resolved.is_none() {
-                    match self.get_remote_image() {
-                        Ok(u) => resolved = Some(u),
-                        Err(e) => debug!("remote artwork not usable ({}), trying kodi-direct..", e),
-                    }
-                }
-
-                if resolved.is_none() {
-                    match self.get_kodi_direct_image() {
-                        Ok(u) => resolved = Some(u),
-                        Err(e) => debug!("kodi-direct artwork not usable ({}), using default..", e),
-                    }
-                }
-
-                if let Some(u) = resolved {
-                    image_url = u;
-                }
-            }
-
-            let mut assets = Assets::new().large_image(image_url.as_str());
-
-            if !self.large_image_text.is_empty() {
-                assets = assets.large_text(&self.large_image_text);
-            }
-
-            let mut timestamps = Timestamps::new();
-
-            // Per-type behavior: paused handling and buttons come from the
-            // playing section's own options.
-            let show_paused = self
-                .display_options(session.now_playing_item.media_type)
-                .show_paused;
-            match session.get_time()? {
-                PlayTime::Some(start, end) => timestamps = timestamps.start(start).end(end),
-                PlayTime::None => (),
-                PlayTime::Paused if show_paused => {
-                    assets = assets
-                        .small_image("https://i.imgur.com/wlHSvYy.png")
-                        .small_text("Paused");
-                }
-                PlayTime::Paused => return Ok(String::new()),
-            }
-
-            let buttons: Vec<Button>;
-            let button_names: Vec<String>;
-
-            if let Some(b) = self.get_buttons() {
-                buttons = b;
-                button_names = buttons
-                    .iter()
-                    .map(|b| b.name.chars().take(MAX_BUTTON_LABEL_LEN).collect())
-                    .collect();
-                activity = activity.buttons(
-                    buttons
-                        .iter()
-                        .zip(button_names.iter())
-                        .map(|(b, name)| ActButton::new(name, &b.url))
-                        .collect(),
-                );
-            }
-
-            let mut state = self.get_state();
-
-            if state.len() > MAX_TEXT_LEN {
-                state = state.chars().take(MAX_TEXT_LEN).collect();
-            } else if state.len() < 3 {
-                state += "‎‎‎";
-            }
-
-            let mut details = self.get_details();
-
-            if details.len() > MAX_TEXT_LEN {
-                details = details.chars().take(MAX_TEXT_LEN).collect();
-            } else if details.len() < 3 {
-                details += "‎‎‎";
-            }
-
-            let mut image_text = self.get_image_text();
-
-            if image_text.is_empty() {
-                image_text = format!("Kodi-RPC v{}", VERSION.unwrap_or("UNKNOWN"));
-            }
-
-            if image_text.len() > MAX_TEXT_LEN {
-                image_text = image_text.chars().take(MAX_TEXT_LEN).collect();
-            } else if image_text.len() < 3 {
-                image_text += "‎‎‎";
-            }
-
-            assets = assets.large_text(image_text.as_str());
-
-            match session.now_playing_item.media_type {
-                MediaType::Book => (),
-                MediaType::Music | MediaType::AudioBook => {
-                    activity = activity.activity_type(ActivityType::Listening)
-                }
-                _ => activity = activity.activity_type(ActivityType::Watching),
-            }
-
-            let status_display_type = self.get_status_display_type();
-
-            activity = activity
-                .timestamps(timestamps)
-                .assets(assets)
-                .details(&details)
-                .state(&state)
-                .status_display_type(status_display_type.into());
-
-            self.discord_ipc_client.set_activity(activity)?;
-
-            return Ok(format!("{} | {}", details, state));
+        let media_type = match &self.session {
+            Some(s) => s.now_playing_item.media_type,
+            None => return Ok(String::new()),
+        };
+        if media_type == MediaType::None {
+            return Err(Box::new(KodiError::UnrecognizedMediaType));
         }
-        Ok(String::new())
+
+        if self.check_blacklist()? {
+            return Err(Box::new(KodiError::ContentBlacklist));
+        }
+
+        let mut activity = Activity::new();
+
+        let mut image_url = Url::from_str("https://i.imgur.com/koCh16G.png")?;
+
+        if media_type == MediaType::LiveTv {
+            image_url = Url::from_str("https://i.imgur.com/XxdHOqm.png")?;
+        } else if self.show_images {
+            // Fallback chain: litterbox -> imgur -> remote CDN https
+            // (e.g. TMDB) -> Kodi-direct (public non-localhost, no auth)
+            // -> default icon. Upload failures warn once per cooldown
+            // instead of re-downloading + re-uploading every poll.
+            let mut resolved: Option<Url> = None;
+            for service in [UploadService::Litterbox, UploadService::Imgur] {
+                if resolved.is_none() {
+                    resolved = self.try_upload(service);
+                }
+            }
+
+            if resolved.is_none() {
+                match self.get_remote_image() {
+                    Ok(u) => resolved = Some(u),
+                    Err(e) => debug!("remote artwork not usable ({}), trying kodi-direct..", e),
+                }
+            }
+
+            if resolved.is_none() {
+                match self.get_kodi_direct_image() {
+                    Ok(u) => resolved = Some(u),
+                    Err(e) => debug!("kodi-direct artwork not usable ({}), using default..", e),
+                }
+            }
+
+            if let Some(u) = resolved {
+                image_url = u;
+            }
+        }
+
+        let mut assets = Assets::new().large_image(image_url.as_str());
+
+        if !self.large_image_text.is_empty() {
+            assets = assets.large_text(&self.large_image_text);
+        }
+
+        let mut timestamps = Timestamps::new();
+
+        // Per-type behavior: paused handling and buttons come from the
+        // playing section's own options.
+        let session = self.session.as_ref().unwrap();
+        let show_paused = self
+            .display_options(session.now_playing_item.media_type)
+            .show_paused;
+        match session.get_time()? {
+            PlayTime::Some(start, end) => timestamps = timestamps.start(start).end(end),
+            PlayTime::None => (),
+            PlayTime::Paused if show_paused => {
+                assets = assets
+                    .small_image("https://i.imgur.com/wlHSvYy.png")
+                    .small_text("Paused");
+            }
+            PlayTime::Paused => return Ok(String::new()),
+        }
+
+        let buttons: Vec<Button>;
+        let button_names: Vec<String>;
+
+        if let Some(b) = self.get_buttons() {
+            buttons = b;
+            button_names = buttons
+                .iter()
+                .map(|b| b.name.chars().take(MAX_BUTTON_LABEL_LEN).collect())
+                .collect();
+            activity = activity.buttons(
+                buttons
+                    .iter()
+                    .zip(button_names.iter())
+                    .map(|(b, name)| ActButton::new(name, &b.url))
+                    .collect(),
+            );
+        }
+
+        let mut state = self.get_state();
+
+        if state.len() > MAX_TEXT_LEN {
+            state = state.chars().take(MAX_TEXT_LEN).collect();
+        } else if state.len() < 3 {
+            state += "‎‎‎";
+        }
+
+        let mut details = self.get_details();
+
+        if details.len() > MAX_TEXT_LEN {
+            details = details.chars().take(MAX_TEXT_LEN).collect();
+        } else if details.len() < 3 {
+            details += "‎‎‎";
+        }
+
+        let mut image_text = self.get_image_text();
+
+        if image_text.is_empty() {
+            image_text = format!("Kodi-RPC v{}", VERSION.unwrap_or("UNKNOWN"));
+        }
+
+        if image_text.len() > MAX_TEXT_LEN {
+            image_text = image_text.chars().take(MAX_TEXT_LEN).collect();
+        } else if image_text.len() < 3 {
+            image_text += "‎‎‎";
+        }
+
+        assets = assets.large_text(image_text.as_str());
+
+        match session.now_playing_item.media_type {
+            MediaType::Book => (),
+            MediaType::Music | MediaType::AudioBook => {
+                activity = activity.activity_type(ActivityType::Listening)
+            }
+            _ => activity = activity.activity_type(ActivityType::Watching),
+        }
+
+        let status_display_type = self.get_status_display_type();
+
+        activity = activity
+            .timestamps(timestamps)
+            .assets(assets)
+            .details(&details)
+            .state(&state)
+            .status_display_type(status_display_type.into());
+
+        self.discord_ipc_client.set_activity(activity)?;
+
+        Ok(format!("{} | {}", details, state))
     }
 
     fn jsonrpc<T: Serialize, R: for<'de> Deserialize<'de>>(
@@ -2353,6 +2439,8 @@ impl ClientBuilder {
             large_image_text: self.large_image_text,
             poster_cache: HashMap::new(),
             crunchy_cache: HashMap::new(),
+            litterbox_backoff: ServiceBackoff::default(),
+            imgur_backoff: ServiceBackoff::default(),
         })
     }
 }

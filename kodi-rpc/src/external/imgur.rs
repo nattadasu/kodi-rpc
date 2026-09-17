@@ -123,15 +123,20 @@ fn upload(client: &Client) -> KodiResult<Url> {
         image_bytes.to_vec()
     };
 
-    let res: ImgurResponse = imgur_client
-        .post("https://api.imgur.com/3/image")
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("Client-ID {}", client.imgur_options.client_id),
-        )
-        .body(body)
-        .send()?
-        .json()?;
+    let text = super::upload_body(
+        "imgur",
+        imgur_client
+            .post("https://api.imgur.com/3/image")
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Client-ID {}", client.imgur_options.client_id),
+            )
+            .body(body)
+            .send()?,
+    )?;
 
-    Ok(Url::parse(res.data.link.as_str())?)
+    match serde_json::from_str::<ImgurResponse>(&text) {
+        Ok(r) => Ok(Url::parse(r.data.link.as_str())?),
+        Err(_) => Err(format!("imgur bad response: {}", super::snippet(&text)).into()),
+    }
 }
