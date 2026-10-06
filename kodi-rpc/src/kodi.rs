@@ -722,7 +722,8 @@ impl NowPlayingItem {
         // Crunchyroll fallback: fill any missing episode fields from the
         // `"{series} - S{SS}E{EE} - {episode}"` label. Fully rich items skip
         // parsing; partial stubs get only their gaps filled.
-        if crate::crunchyroll::is_crunchyroll_addon(addon_id.as_deref())
+        let is_crunchy = crate::crunchyroll::is_crunchyroll_playback(&file, addon_id.as_deref());
+        if is_crunchy
             && (media_type == MediaType::Unknown
                 || season.is_none()
                 || episode.is_none()
@@ -752,6 +753,11 @@ impl NowPlayingItem {
             }
         }
 
+        // Plugin titles often duplicate the show; reduce to the episode title.
+        if media_type == MediaType::Episode {
+            name = clean_episode_title(&name, showtitle.as_deref(), season, episode);
+        }
+
         let studio_joined = item
             .studio
             .clone()
@@ -777,23 +783,32 @@ impl NowPlayingItem {
         let mb_album = first_id(&item.musicbrainzalbumid);
         let mb_album_artist = first_id(&item.musicbrainzalbumartistid);
 
-        // Dynamic buttons come from series/movie library info. Crunchyroll
-        // items also get Series/Watch links from the playback path, stub or not.
+        // Crunchyroll links come from the playback path, direct or proxied.
         // Songs get MusicBrainz links straight from Player.GetItem tags.
-        let external_urls = if crate::crunchyroll::is_crunchyroll_addon(addon_id.as_deref()) {
-            crate::crunchyroll::playback_ids(&file).map(|ids| {
-                let mut urls = vec![ExternalUrl {
-                    name: "Watch Episode".to_string(),
-                    url: crate::crunchyroll::watch_url(&ids.episode),
-                }];
-                if let Some(series) = ids.series {
-                    urls.push(ExternalUrl {
-                        name: "View Series Info".to_string(),
-                        url: crate::crunchyroll::series_url(&series),
-                    });
-                }
-                urls
-            })
+        let external_urls = if is_crunchy {
+            crate::crunchyroll::playback_ids(&file)
+                .map(|ids| {
+                    let mut urls = vec![ExternalUrl {
+                        name: "Watch Episode".to_string(),
+                        url: crate::crunchyroll::watch_url(&ids.episode),
+                    }];
+                    if let Some(series) = ids.series {
+                        urls.push(ExternalUrl {
+                            name: "View Series Info".to_string(),
+                            url: crate::crunchyroll::series_url(&series),
+                        });
+                    }
+                    urls
+                })
+                .or_else(|| {
+                    // Proxy URLs keep only the episode id: Watch Episode alone.
+                    crate::crunchyroll::episode_id_from_proxy(&file).map(|ep| {
+                        vec![ExternalUrl {
+                            name: "Watch Episode".to_string(),
+                            url: crate::crunchyroll::watch_url(&ep),
+                        }]
+                    })
+                })
         } else if media_type == MediaType::Music {
             let mut urls = Vec::new();
             if let Some(id) = mb_track
@@ -1108,6 +1123,57 @@ pub fn strip_kodi_tags(input: &str) -> String {
         .join(" ")
         .trim()
         .to_string()
+}
+
+/// Strip a duplicated `"{show} - SxxEyy - "` prefix from an episode title.
+/// Only strips when the token matches the known season/episode/show.
+pub fn clean_episode_title(
+    name: &str,
+    showtitle: Option<&str>,
+    season: Option<i32>,
+    episode: Option<i32>,
+) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return name.to_string();
+    }
+    if let Some((show, s_num, e_num, ep_title)) = crate::crunchyroll::parse_label(trimmed) {
+        let season_ok = season.map(|s| s == s_num).unwrap_or(true);
+        let episode_ok = episode.map(|e| e == e_num).unwrap_or(true);
+        let show_ok = match showtitle {
+            Some(st) => {
+                let st = st.trim();
+                st.eq_ignore_ascii_case(show.trim())
+                    || trimmed
+                        .to_lowercase()
+                        .starts_with(&format!("{} - ", st.to_lowercase()))
+            }
+            None => true,
+        };
+        if season_ok && episode_ok && show_ok {
+            return ep_title;
+        }
+    }
+    // Fallback: literal `"{showtitle} - "` prefix without a parseable token.
+    if let Some(st) = showtitle.map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(rest) = trimmed.strip_prefix(st) {
+            let rest = rest.trim_start_matches(['-', '–', '—', ' ', ':']);
+            let parts: Vec<&str> = rest.splitn(2, " - ").collect();
+            if parts.len() == 2 {
+                if let Some((s_num, e_num)) =
+                    crate::crunchyroll::parse_season_episode_token(parts[0].trim())
+                {
+                    let ok = season.map(|s| s == s_num).unwrap_or(true)
+                        && episode.map(|e| e == e_num).unwrap_or(true);
+                    let tail = parts[1].trim();
+                    if ok && !tail.is_empty() {
+                        return tail.to_string();
+                    }
+                }
+            }
+        }
+    }
+    name.to_string()
 }
 
 /// `plugin://plugin.video.youtube/play/?v=...` -> `Some("plugin.video.youtube")`
@@ -1746,6 +1812,7 @@ mod kodi_tests {
         assert_eq!(npi.media_type, MediaType::Episode);
         assert_eq!(npi.parent_index_number, Some(1));
         assert_eq!(npi.index_number, Some(7));
+        assert_eq!(npi.name, "An Unexpected Gift");
         assert!(!npi.is_plugin);
         assert_eq!(npi.file_host_display(), "www.crunchyroll.com");
         assert!(is_loopback_url(&npi.file));
@@ -1753,6 +1820,43 @@ mod kodi_tests {
         assert_eq!(
             unwrap_remote_image(thumb).as_deref(),
             Some("https://www.crunchyroll.com/imgsrv/display/thumbnail/1920x1080/catalog/crunchyroll/1397f82b5ef846af51683f99a0c3379d.png")
+        );
+    }
+
+    #[test]
+    fn rich_proxy_title_cleans_and_links() {
+        let raw = r#"{
+            "label": "Show - S01E01 - Ep Title",
+            "type": "episode",
+            "season": 1,
+            "episode": 1,
+            "showtitle": "Show",
+            "title": "Show - S01E01 - Ep Title",
+            "file": "http://127.0.0.1:51653/proxy?url=https%3A%2F%2Fwww.crunchyroll.com%2Fplayback%2Fv1%2Fmanifest%2FGE00366150JAJP%2Fstatic%2Fmanifest.mpd"
+        }"#;
+        let item: KodiItem = serde_json::from_str(raw).expect("item parses");
+        let props = PlayerGetPropertiesResult {
+            speed: 1.0,
+            time: KodiTime::default(),
+            totaltime: KodiTime::default(),
+            percentage: None,
+        };
+        let npi = NowPlayingItem::from_kodi(&item, &props, "video").expect("displays");
+        assert_eq!(npi.name, "Ep Title");
+        let buttons = npi.external_urls.as_ref().expect("watch button");
+        assert_eq!(buttons.len(), 1);
+        assert_eq!(
+            buttons[0].url,
+            "https://www.crunchyroll.com/watch/GE00366150JAJP"
+        );
+        // Mismatched token leaves the title alone.
+        assert_eq!(
+            clean_episode_title("Show - S01E02 - Other", Some("Show"), Some(1), Some(1)),
+            "Show - S01E02 - Other"
+        );
+        assert_eq!(
+            clean_episode_title("Just a title", Some("Show"), Some(1), Some(1)),
+            "Just a title"
         );
     }
 

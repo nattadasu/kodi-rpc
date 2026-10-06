@@ -691,9 +691,7 @@ impl Client {
         }
     }
 
-    /// Crunchyroll `poster` (+ missing episode `plot`) from directory
-    /// listings. Hits cost 0 RPCs, misses at most 2; entries live for
-    /// [`crunchyroll::CACHE_TTL`], failures negative-cached alike.
+    /// Crunchyroll poster/backdrop/plot from Kodi directory listings.
     fn populate_crunchyroll(
         &mut self,
         npi: &mut NowPlayingItem,
@@ -701,6 +699,8 @@ impl Client {
         source: PosterSource,
     ) {
         let Some(series_id) = crunchyroll::series_id_from_file(&npi.file) else {
+            // Proxy playback carries no series id; resolve via queue/history.
+            self.populate_crunchyroll_proxy(npi, inst_idx, source);
             return;
         };
         let cache_key = format!("{}:crunchy:{}", inst_idx, series_id);
@@ -773,6 +773,61 @@ impl Client {
         }
     }
 
+    /// Proxy playback: map the manifest episode id to its addon entry
+    /// via queue/history for the series poster + backdrop.
+    fn populate_crunchyroll_proxy(
+        &mut self,
+        npi: &mut NowPlayingItem,
+        inst_idx: usize,
+        source: PosterSource,
+    ) {
+        let Some(episode_id) = crunchyroll::episode_id_from_proxy(&npi.file) else {
+            return;
+        };
+        let cache_key = format!("{}:crunchy_ep:{}", inst_idx, episode_id);
+        if let Some(entry) = self.crunchy_cache.get(&cache_key) {
+            if entry.is_fresh() {
+                Self::apply_crunchy_entry(npi, entry, source);
+                return;
+            }
+        }
+        let mut entry = CrunchySeriesEntry::default();
+        if let Some(hit) = self.resolve_proxy_episode(inst_idx, &episode_id) {
+            entry.poster = pick_art_poster(&hit.art);
+            entry.fanart = hit
+                .fanart
+                .clone()
+                .filter(|f| !f.is_empty())
+                .or_else(|| hit.art.get("fanart").cloned());
+            if let Some(plot) = hit.plot.clone().filter(|p| !p.trim().is_empty()) {
+                entry.episode_plots.insert(npi.file.clone(), plot);
+            }
+        }
+        self.crunchy_cache.insert(cache_key.clone(), entry.clone());
+        if let Some(entry) = self.crunchy_cache.get(&cache_key) {
+            Self::apply_crunchy_entry(npi, entry, source);
+        }
+    }
+
+    /// First queue (short), then history, match on episode id substring.
+    fn resolve_proxy_episode(
+        &self,
+        inst_idx: usize,
+        episode_id: &str,
+    ) -> Option<crunchyroll::DirectoryFile> {
+        for dir in [crunchyroll::QUEUE_DIR, crunchyroll::HISTORY_DIR] {
+            if let Some(files) = self.fetch_crunchy_directory(inst_idx, dir) {
+                if crunchyroll::is_login_failure(&files) {
+                    continue;
+                }
+                if let Some(hit) = files.iter().find(|f| f.file.contains(episode_id)) {
+                    return Some(hit.clone());
+                }
+            }
+        }
+        None
+    }
+
     fn apply_crunchy_entry(
         npi: &mut NowPlayingItem,
         entry: &CrunchySeriesEntry,
@@ -782,6 +837,16 @@ impl Client {
         if source != PosterSource::Episode && npi.poster.is_none() {
             if let Some(poster) = entry.poster.clone() {
                 npi.poster = Some(poster);
+            }
+        }
+        // Prefer the real backdrop over a fanart that duplicates the still.
+        if let Some(fanart) = entry.fanart.clone() {
+            let dupe = npi
+                .fanart
+                .as_ref()
+                .is_some_and(|f| Some(f) == npi.thumbnail.as_ref());
+            if npi.fanart.is_none() || dupe {
+                npi.fanart = Some(fanart);
             }
         }
         if npi.plot.is_none() {

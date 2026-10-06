@@ -154,20 +154,77 @@ fn read_file(client: &Client) -> KodiResult<Vec<ImageUrl>> {
     Ok(new)
 }
 
-/// tmpfiles answers with a preview-page URL (`https://tmpfiles.org/{id}/{name}`);
-/// Discord needs the raw bytes, served from the `/dl/` direct link, so the
-/// image it fetches is binary-identical to the upload.
+/// Legacy `/dl` prefix derivation; fresh uploads scrape the tokenized link
+/// from the preview page instead (see [`resolve_direct_url`]).
 fn direct_download_url(page_url: &str) -> KodiResult<Url> {
-    let mut url = Url::parse(page_url.trim())?;
+    let url = Url::parse(page_url.trim())?;
     if url.path().starts_with("/dl/") {
         return Ok(url);
     }
-    url.set_path(&format!("/dl{}", url.path()));
-    Ok(url)
+    let mut derived = url.clone();
+    derived.set_path(&format!("/dl{}", url.path()));
+    Ok(derived)
 }
 
-/// Validate an upload response body: success status plus a usable URL.
-/// Pure (no network) so it can be unit-tested.
+/// Scrape the tokenized direct link from a tmpfiles preview page.
+fn extract_direct_url_from_page(page_html: &str) -> Option<Url> {
+    const PREFIX: &str = "https://tmpfiles.org/dl/";
+    let mut search = page_html;
+    let mut best: Option<String> = None;
+    while let Some(start) = search.find(PREFIX) {
+        let rest = &search[start..];
+        let end = rest
+            .find(|c| {
+                c == '"'
+                    || c == '\''
+                    || c == '<'
+                    || c == '>'
+                    || c == ' '
+                    || c == '\n'
+                    || c == '\r'
+                    || c == '\t'
+            })
+            .unwrap_or(rest.len());
+        let mut candidate = rest[..end].to_string();
+        candidate = candidate.replace("&amp;", "&");
+        // Tokenized links have `/dl/{token}/{id}/{file}` (3 segments).
+        let segments: Vec<&str> = candidate
+            .trim_start_matches(PREFIX)
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect();
+        if segments.len() >= 3 && Url::parse(&candidate).is_ok() {
+            // Prefer image links; otherwise keep the first tokenized hit.
+            if candidate.ends_with(".png")
+                || candidate.ends_with(".jpg")
+                || candidate.ends_with(".jpeg")
+                || candidate.ends_with(".webp")
+                || candidate.ends_with(".gif")
+            {
+                return Url::parse(&candidate).ok();
+            }
+            if best.is_none() {
+                best = Some(candidate);
+            }
+        }
+        search = &search[start + PREFIX.len()..];
+    }
+    best.and_then(|u| Url::parse(&u).ok())
+}
+
+/// Fetch the preview page and scrape the tokenized direct-download URL.
+fn resolve_direct_url(http: &reqwest::blocking::Client, page_url: &Url) -> KodiResult<Url> {
+    let html = super::upload_body("tmpfiles", http.get(page_url.clone()).send()?)?;
+    extract_direct_url_from_page(&html).ok_or_else(|| {
+        format!(
+            "tmpfiles preview page has no direct link: {}",
+            super::snippet(&html)
+        )
+        .into()
+    })
+}
+
+/// Validate an upload response; returns the preview-page URL.
 fn parse_upload_response(text: &str) -> KodiResult<Url> {
     let resp: TmpfilesResponse = serde_json::from_str(text)
         .map_err(|_| format!("tmpfiles bad response: {}", super::snippet(text)))?;
@@ -177,7 +234,7 @@ fn parse_upload_response(text: &str) -> KodiResult<Url> {
         return Err(format!("tmpfiles rejected upload: {}", super::snippet(text)).into());
     }
     match resp.data {
-        Some(d) if !d.url.trim().is_empty() => direct_download_url(&d.url),
+        Some(d) if !d.url.trim().is_empty() => Ok(Url::parse(d.url.trim())?),
         _ => Err(format!("tmpfiles bad response: {}", super::snippet(text)).into()),
     }
 }
@@ -208,7 +265,8 @@ fn upload(client: &Client) -> KodiResult<Url> {
 
     debug!("Response from tmpfiles: \"{}\"", super::snippet(&text));
 
-    let direct = parse_upload_response(&text)?;
+    let page_url = parse_upload_response(&text)?;
+    let direct = resolve_direct_url(&http, &page_url)?;
 
     // Binary-identical guarantee: fetch the served bytes back and compare
     // with what was sent. A transcode/proxy in the middle fails the upload
@@ -217,7 +275,17 @@ fn upload(client: &Client) -> KodiResult<Url> {
     if !verify.status().is_success() {
         return Err(format!("tmpfiles verification failed (HTTP {})", verify.status()).into());
     }
-    if verify.bytes()?.to_vec() != file_bytes {
+    let served = verify.bytes()?.to_vec();
+    // Reject HTML preview pages served instead of the file bytes.
+    let looks_like_html = served.len() > 15
+        && served
+            .iter()
+            .take(200)
+            .all(|b| b.is_ascii_graphic() || b.is_ascii_whitespace())
+        && String::from_utf8_lossy(&served[..served.len().min(200)])
+            .to_lowercase()
+            .contains("<html");
+    if looks_like_html || served != file_bytes {
         return Err("tmpfiles verification failed (served bytes differ from upload)".into());
     }
 
@@ -249,10 +317,11 @@ mod tests {
 
     #[test]
     fn response_parsing() {
+        // Uploads yield the preview page; the direct link is scraped from it.
         let ok = r#"{"status":"success","data":{"url":"https://tmpfiles.org/12345/art.png"}}"#;
         assert_eq!(
             parse_upload_response(ok).unwrap().as_str(),
-            "https://tmpfiles.org/dl/12345/art.png"
+            "https://tmpfiles.org/12345/art.png"
         );
         // Boolean success shape tolerated too.
         let ok_bool = r#"{"status":true,"data":{"url":"https://tmpfiles.org/dl/7/x.jpg"}}"#;
@@ -265,5 +334,17 @@ mod tests {
         assert!(parse_upload_response("<!doctype html>502").is_err());
         assert!(parse_upload_response(r#"{"status":"success","data":{}}"#).is_err());
         assert!(parse_upload_response(r#"{"status":"success"}"#).is_err());
+    }
+
+    #[test]
+    fn preview_page_scraping() {
+        let html = r#"<img id="img_preview" src="https://tmpfiles.org/dl/1791260874.9a53a67ba5330b25/w9Agl96wYITs/1791260564.jpg"/><p><a class="download" href="https://tmpfiles.org/dl/1791260874.9a53a67ba5330b25/w9Agl96wYITs/1791260564.jpg">Download</a></p>"#;
+        assert_eq!(
+            extract_direct_url_from_page(html).unwrap().as_str(),
+            "https://tmpfiles.org/dl/1791260874.9a53a67ba5330b25/w9Agl96wYITs/1791260564.jpg"
+        );
+        // Non-tokenized preview links don't count.
+        assert!(extract_direct_url_from_page("<html>no links</html>").is_none());
+        assert!(extract_direct_url_from_page("").is_none());
     }
 }

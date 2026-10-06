@@ -139,6 +139,54 @@ pub fn series_id_from_file(file: &str) -> Option<String> {
     playback_ids(file)?.series
 }
 
+/// Queue/history searched (in order) to map a proxy episode id to its entry.
+pub const QUEUE_DIR: &str = "plugin://plugin.video.crunchyroll/menu/queue";
+pub const HISTORY_DIR: &str = "plugin://plugin.video.crunchyroll/menu/history";
+
+/// Inner URL of SlyGuy-style http proxy playback.
+/// Returns `None` unless the wrapped URL points at Crunchyroll.
+pub fn proxy_inner_url(file: &str) -> Option<String> {
+    if !(file.starts_with("http://") || file.starts_with("https://")) {
+        return None;
+    }
+    let url = url::Url::parse(file).ok()?;
+    let inner = url
+        .query_pairs()
+        .find(|(k, _)| k == "url")
+        .map(|(_, v)| v.into_owned())?;
+    if inner.contains("crunchyroll.com") {
+        Some(inner)
+    } else {
+        None
+    }
+}
+
+/// Episode id from a proxy inner manifest URL
+/// (`.../playback/v1/manifest/{episode}/...`).
+pub fn episode_id_from_proxy(file: &str) -> Option<String> {
+    let inner = proxy_inner_url(file)?;
+    let parsed = url::Url::parse(&inner).ok()?;
+    let segs: Vec<&str> = parsed.path_segments()?.collect();
+    for (i, s) in segs.iter().enumerate() {
+        if s.eq_ignore_ascii_case("manifest") {
+            if let Some(id) = segs.get(i + 1).map(|s| s.trim()) {
+                if !id.is_empty() && id.bytes().any(|b| b.is_ascii_digit()) {
+                    return Some(id.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// True for direct plugin playback or a proxy wrapping a Crunchyroll URL.
+pub fn is_crunchyroll_playback(file: &str, addon_id: Option<&str>) -> bool {
+    if is_crunchyroll_addon(addon_id) {
+        return true;
+    }
+    proxy_inner_url(file).is_some()
+}
+
 /// Public watch page for an episode. `GET /watch/{id}` redirects to the
 /// full slugged episode URL.
 pub fn watch_url(episode_id: &str) -> String {
@@ -411,6 +459,33 @@ mod tests {
             Some("A plot")
         );
         assert_eq!(entry.plot_for("plugin://other"), None);
+    }
+
+    #[test]
+    fn proxy_playback_parsing() {
+        let proxy = "http://127.0.0.1:51653/proxy?url=https%3A%2F%2Fwww.crunchyroll.com%2Fplayback%2Fv1%2Fmanifest%2FGE00366150JAJP%2Fstatic%2Fmanifest.mpd";
+        assert!(proxy_inner_url(proxy).is_some());
+        assert_eq!(
+            episode_id_from_proxy(proxy).as_deref(),
+            Some("GE00366150JAJP")
+        );
+        assert!(is_crunchyroll_playback(proxy, None));
+        assert!(is_crunchyroll_playback(
+            "plugin://plugin.video.crunchyroll/video/GT/GE/GEV",
+            Some("plugin.video.crunchyroll")
+        ));
+        assert!(!is_crunchyroll_playback(
+            "smb://server/share/movie.mkv",
+            None
+        ));
+        assert!(!is_crunchyroll_playback(
+            "http://127.0.0.1:51653/proxy?url=https%3A%2F%2Fexample.com%2Fvideo",
+            None
+        ));
+        assert_eq!(
+            episode_id_from_proxy("plugin://plugin.video.crunchyroll/video/GT/GE/GEV"),
+            None
+        );
     }
 
     #[test]

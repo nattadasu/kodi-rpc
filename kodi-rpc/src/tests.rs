@@ -452,10 +452,11 @@ fn proxy_file_shows_proxied_host() {
         ..Default::default()
     };
     let npi = NowPlayingItem::from_kodi(&item, &fake_props(), "video").expect("parses");
-    assert_eq!(npi.media_type, crate::MediaType::Unknown);
+    // Crunchyroll proxy + parseable label classifies as Episode.
+    assert_eq!(npi.media_type, crate::MediaType::Episode);
+    assert_eq!(npi.name, "Title");
     assert_eq!(npi.file_host_display(), "www.crunchyroll.com");
-    // Playback file URLs never become buttons; dynamics come from
-    // series/movie library info instead.
+    // No episode id in this manifest URL, so no buttons.
     assert!(npi.external_urls.is_none());
 }
 
