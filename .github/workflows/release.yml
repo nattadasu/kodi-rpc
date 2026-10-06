@@ -22,39 +22,24 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install latest rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          default: true
-          override: true
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache target folder
-        uses: actions/cache@v4
-        env:
-          cache-name: target-folder
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
         with:
-          path: target
-          key: x86_64-linux-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            x86_64-linux-
+          shared-key: x86_64-linux
 
       - name: Build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --workspace --locked --release
+        run: cargo build --workspace --locked --release
 
       - name: Rename binary
         run: mv target/release/kodi-rpc target/release/kodi-rpc-x86_64-linux
 
       - name: Run cargo test
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --all-features --locked
+        run: cargo test --all-features --locked
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -70,37 +55,27 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install latest rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          target: armv7-unknown-linux-gnueabihf
-          default: true
-          override: true
+          targets: armv7-unknown-linux-gnueabihf
 
       - name: Update apt and install ARM32 gcc
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf
 
-      - name: Cache target folder
-        uses: actions/cache@v4
-        env:
-          cache-name: target-folder
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
         with:
-          path: target
-          key: arm32-linux-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            arm32-linux-
+          shared-key: arm32-linux
 
       - name: Build for ARM32 Linux
-        uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: build
-          args: --target armv7-unknown-linux-gnueabihf --workspace --locked --release
+        run: cargo build --target armv7-unknown-linux-gnueabihf --workspace --locked --release
+        env:
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
 
       - name: Rename binary
         run: mv target/armv7-unknown-linux-gnueabihf/release/kodi-rpc target/armv7-unknown-linux-gnueabihf/release/kodi-rpc-arm32-linux
@@ -119,37 +94,27 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install latest rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          target: aarch64-unknown-linux-gnu
-          default: true
-          override: true
+          targets: aarch64-unknown-linux-gnu
 
       - name: Update apt and install ARM64 gcc
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Cache target folder
-        uses: actions/cache@v4
-        env:
-          cache-name: target-folder
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
         with:
-          path: target
-          key: arm64-linux-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            arm64-linux-
+          shared-key: arm64-linux
 
       - name: Build for ARM64 Linux
-        uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: build
-          args: --target aarch64-unknown-linux-gnu --workspace --locked --release
+        run: cargo build --target aarch64-unknown-linux-gnu --workspace --locked --release
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
       - name: Rename binary
         run: mv target/aarch64-unknown-linux-gnu/release/kodi-rpc target/aarch64-unknown-linux-gnu/release/kodi-rpc-arm64-linux
@@ -168,36 +133,21 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install latest rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          default: true
-          override: true
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache target folder
-        uses: actions/cache@v4
-        env:
-          cache-name: target-folder
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
         with:
-          path: target
-          key: x86_64-windows-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            x86_64-windows-
+          shared-key: x86_64-windows
 
       - name: Build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --workspace --locked --release
+        run: cargo build --workspace --locked --release
 
       - name: Run cargo test
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --all-features --locked
+        run: cargo test --all-features --locked
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -212,40 +162,26 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install latest rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          target: x86_64-apple-darwin
-          default: true
-          override: true
+          targets: x86_64-apple-darwin
 
-      - name: Cache target folder
-        uses: actions/cache@v4
-        env:
-          cache-name: target-folder
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
         with:
-          path: target
-          key: x86_64-macos-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            x86_64-macos-
+          shared-key: x86_64-macos
 
       - name: Build for x86_64 macOS
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --target x86_64-apple-darwin --workspace --locked --release
+        run: cargo build --target x86_64-apple-darwin --workspace --locked --release
 
       - name: Rename binary
         run: mv target/x86_64-apple-darwin/release/kodi-rpc target/x86_64-apple-darwin/release/kodi-rpc-x86_64-darwin
 
       - name: Run cargo test
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --all-features --locked
+        run: cargo test --all-features --locked
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -261,31 +197,20 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install latest rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          target: aarch64-apple-darwin
-          default: true
-          override: true
+          targets: aarch64-apple-darwin
 
-      - name: Cache target folder
-        uses: actions/cache@v4
-        env:
-          cache-name: target-folder
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
         with:
-          path: target
-          key: arm64-macos-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            arm64-macos-
+          shared-key: arm64-macos
 
       - name: Build for arm64 macOS
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --target aarch64-apple-darwin --workspace --locked --release
+        run: cargo build --target aarch64-apple-darwin --workspace --locked --release
 
       - name: Rename binary
         run: mv target/aarch64-apple-darwin/release/kodi-rpc target/aarch64-apple-darwin/release/kodi-rpc-arm64-darwin
