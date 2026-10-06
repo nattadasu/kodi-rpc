@@ -1,6 +1,6 @@
 [package]
 name         = "kodi-rpc-cli"
-version      = "1.3.2"
+version      = "1.3.3"
 edition      = "2021"
 description  = "Displays the content you're currently watching on Kodi in Discord!"
 license      = "GPL-3.0-or-later"
